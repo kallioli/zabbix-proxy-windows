@@ -540,6 +540,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check the tag against UPSTREAM_VERSION
         run: |
@@ -555,6 +557,17 @@ jobs:
           name: zabbix_proxy-msi
           path: dist
 
+      # Several series are released from this repository; the one on main is
+      # the current line, so only its releases take the "latest" mark.
+      - name: Decide whether this release is the latest
+        run: |
+          git fetch --quiet origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "LATEST=true" >> "$GITHUB_ENV"
+          else
+            echo "LATEST=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -563,6 +576,6 @@ jobs:
           msi="zabbix_proxy-${ZBX_VERSION}-x64.msi"
           sha256sum "$msi" > SHA256SUMS
           pre=""; case "$ZBX_VERSION" in *alpha*|*beta*|*rc*) pre="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" "$msi" SHA256SUMS $pre \
+          gh release create "$GITHUB_REF_NAME" "$msi" SHA256SUMS $pre --latest=$LATEST \
             --title "Zabbix proxy $ZBX_VERSION for Windows (${GITHUB_REF_NAME#v})" \
             --notes "Community build of the Zabbix $ZBX_VERSION proxy for Windows x64. Unsigned; check the SHA-256 against SHA256SUMS. Not affiliated with Zabbix SIA. Source: the $GITHUB_REF_NAME tag of this repository plus Zabbix $ZBX_VERSION."

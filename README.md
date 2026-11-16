@@ -18,7 +18,7 @@ Download the MSI from the [latest release](../../releases/latest), then from an
 elevated prompt:
 
 ```powershell
-msiexec /i zabbix_proxy-7.4.16-x64.msi SERVER=zabbix.example.com HOSTNAME=proxy-site-a /qn
+msiexec /i zabbix_proxy-8.0.0-x64.msi SERVER=zabbix.example.com HOSTNAME=proxy-site-a /qn
 Start-Service "Zabbix Proxy"
 ```
 
@@ -28,6 +28,20 @@ and the SQLite buffer in `%ProgramData%\Zabbix Proxy`. Upgrades keep your edited
 `zabbix_proxy.conf`.
 
 The binary is not code-signed yet: check it against `SHA256SUMS` in the release.
+
+## Supported Zabbix series
+
+One branch per Zabbix series, each with its own pinned version, overlay and
+patches. Releases are tagged on the branch of their series.
+
+| Series | Branch | Releases | Notes |
+|---|---|---|---|
+| 8.0 (LTS) | `main` | [v8.0.x](../../releases?q=v8.0&expanded=true) | current line |
+| 7.4 | `7.4` | [v7.4.x](../../releases?q=v7.4&expanded=true) | maintenance until Zabbix ends 7.4 support |
+
+A `port-<series>` branch carries the work on the next series until its final
+release, then merges into `main`. The proxy version must match the server
+major version (a 7.4 server takes a 7.4 proxy); pick the series accordingly.
 
 ## What works
 
@@ -86,7 +100,7 @@ Read `patches/` to see exactly what the port changes in Zabbix.
 ## Building
 
 ```bash
-scripts/prepare.sh        # ./zabbix: Zabbix 7.4.16 with the port applied
+scripts/prepare.sh        # ./zabbix: the pinned Zabbix release with the port applied
 ```
 
 Then follow [`overlay/build/win32/README_proxy`](overlay/build/win32/README_proxy)
@@ -110,11 +124,14 @@ A file no patch owns goes to `patches/9999-unsorted.patch` until you move it.
 Moving to a new Zabbix release: `scripts/rebase.sh <version>` applies every
 patch three-way and lists the conflicts. Resolve them in `./zabbix`, write the
 version to `UPSTREAM_VERSION`, run `refresh-patches.sh`. A weekly workflow
-(`upstream-watch.yml`) runs the same check against the newest 7.4 and 8.0
-releases, so a breaking upstream change shows up before release day.
+(`upstream-watch.yml`) runs the same check for every series branch against the
+newest release of its series, and for `main` against the next series too, so a
+breaking upstream change shows up before release day.
 
-Releases: push a tag `v<zabbix version>-<n>` (for example `v7.4.16-3`). CI
-publishes the MSI once every job passes.
+Releases: on the branch of the series, push a tag `v<zabbix version>-<n>`
+(for example `v8.0.0-1` on `main`, `v7.4.17-1` on `7.4`); the tag must match
+the branch's `UPSTREAM_VERSION`. CI publishes the MSI once every job passes.
+Only a release from `main` is marked as the latest one.
 
 Issues and pull requests are welcome, especially test reports from real
 deployments (VMware, large SNMP fleets, many hosts per proxy).

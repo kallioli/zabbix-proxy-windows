@@ -22,44 +22,54 @@ jobs:
     name: Pick the releases to try
     runs-on: ubuntu-latest
     outputs:
-      versions: ${{ steps.pick.outputs.versions }}
+      matrix: ${{ steps.pick.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
 
-      # Watched series: the current one, and the next major (8.0 while the port
-      # is on 7.4). Release candidates count: that is when the work should start.
+      # One series per branch: main (the current line) and every branch named
+      # like a series (7.4). Each is tried against the newest release of its
+      # own series; main also against the next series, since that is where the
+      # port goes next. Release candidates count: that is when the work starts.
       - id: pick
         env:
           INPUT: ${{ github.event.inputs.version }}
         run: |
           if [ -n "$INPUT" ]; then
-            echo "versions=[\"$INPUT\"]" >> "$GITHUB_OUTPUT"; exit 0
+            echo "matrix=[{\"branch\":\"main\",\"version\":\"$INPUT\"}]" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          current=$(tr -d '[:space:]' < UPSTREAM_VERSION)
-          series_cur=${current%.*}
-          series_next=8.0
-          tags=$(git ls-remote --tags https://github.com/zabbix/zabbix | awk '{print $2}' \
-                 | sed 's|refs/tags/||' | grep -v '\^{}')
-          newest() { echo "$tags" | grep -E "^$1\.[0-9]+((alpha|beta|rc)[0-9]+)?$" \
-                     | sed -E 's/^([0-9.]+)$/\1zz/' | sort -V | tail -1 | sed 's/zz$//'; }
+          tags=$(git ls-remote --tags https://github.com/zabbix/zabbix | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '{}')
+          newest() { echo "$tags" | grep -E "^$1[.][0-9]+((alpha|beta|rc)[0-9]+)?$" | awk '{ print ($0 ~ /(alpha|beta|rc)/) ? $0 : $0 "zz" }' | sort -V | tail -1 | sed 's/zz$//'; }
+          next_series() { IFS=. read -r M m <<< "$1"; if [ "$m" -ge 4 ]; then echo "$((M + 1)).0"; else echo "$M.$((m + 2))"; fi; }
+          branches=$(git ls-remote --heads origin | awk '{print $2}' | sed 's|refs/heads/||' | grep -E '^(main|[0-9]+[.][0-9]+)$')
           list=()
-          for s in "$series_cur" "$series_next"; do
-            v=$(newest "$s"); [ -n "$v" ] && [ "$v" != "$current" ] && list+=("\"$v\"")
+          for b in $branches; do
+            git fetch --quiet --depth 1 origin "$b"
+            current=$(git show FETCH_HEAD:UPSTREAM_VERSION | tr -d '[:space:]')
+            series=${current%.*}
+            v=$(newest "$series")
+            [ -n "$v" ] && [ "$v" != "$current" ] && list+=("{\"branch\":\"$b\",\"version\":\"$v\"}")
+            if [ "$b" = "main" ]; then
+              v=$(newest "$(next_series "$series")")
+              [ -n "$v" ] && list+=("{\"branch\":\"main\",\"version\":\"$v\"}")
+            fi
+            echo "$b is on $current"
           done
-          echo "versions=[$(IFS=,; echo "${list[*]}")]" >> "$GITHUB_OUTPUT"
-          echo "current $current, trying: ${list[*]:-nothing new}"
+          echo "matrix=[$(IFS=,; echo "${list[*]}")]" >> "$GITHUB_OUTPUT"
+          echo "trying: ${list[*]:-nothing new}"
 
   rebase:
-    name: Port onto ${{ matrix.version }}
+    name: Port ${{ matrix.branch }} onto ${{ matrix.version }}
     needs: pick
-    if: needs.pick.outputs.versions != '[]'
+    if: needs.pick.outputs.matrix != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(needs.pick.outputs.versions) }}
+        include: ${{ fromJSON(needs.pick.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
 
       - name: Apply overlay and patches three-way
         id: rebase
@@ -91,13 +101,13 @@ jobs:
         if: steps.rebase.outputs.conflicts == 'yes'
         run: |
           cd zabbix
-          git diff upstream > "$RUNNER_TEMP/port-on-${{ matrix.version }}.diff"
+          git diff upstream > "$RUNNER_TEMP/port-on-${{ matrix.branch }}-${{ matrix.version }}.diff"
 
       - uses: actions/upload-artifact@v4
         if: steps.rebase.outputs.conflicts == 'yes'
         with:
-          name: port-on-${{ matrix.version }}
-          path: ${{ runner.temp }}/port-on-${{ matrix.version }}.diff
+          name: port-on-${{ matrix.branch }}-${{ matrix.version }}
+          path: ${{ runner.temp }}/port-on-${{ matrix.branch }}-${{ matrix.version }}.diff
 
       - name: Fail the run when there is work to do
         if: steps.rebase.outputs.conflicts == 'yes'
