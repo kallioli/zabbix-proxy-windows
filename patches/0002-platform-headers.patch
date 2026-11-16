@@ -4,7 +4,7 @@ POSIX types, thread and service declarations that the Unix build gets
 from the system headers.
 
 diff --git a/include/common/zbxsysinc.h b/include/common/zbxsysinc.h
-index 31149e9bab8c340c4a8d6419fd7d45149130e42e..9c537a90ef3f417283b031f7654aa670cdc486b9 100644
+index 0bc54862899ff2c4974338917b789e8d605573a1..ec04d18ed840041da483cbc3427c5331f8a4c027 100644
 --- a/include/common/zbxsysinc.h
 +++ b/include/common/zbxsysinc.h
 @@ -57,6 +57,16 @@
@@ -24,8 +24,8 @@ index 31149e9bab8c340c4a8d6419fd7d45149130e42e..9c537a90ef3f417283b031f7654aa670
  #endif
  
  #ifdef HAVE_PROCESS_H
-@@ -421,4 +431,48 @@
- #	include <libgen.h>
+@@ -431,4 +441,51 @@
+ #	include <setjmp.h>
  #endif
  
 +#ifdef _WINDOWS
@@ -66,6 +66,9 @@ index 31149e9bab8c340c4a8d6419fd7d45149130e42e..9c537a90ef3f417283b031f7654aa670
 +
 +/* implemented in src/libs/zbxwin/posix_win.c */
 +struct timeval;
++#	define CLOCK_REALTIME	0
++#	define CLOCK_MONOTONIC	1
++int		clock_gettime(int clk_id, struct timespec *tp);
 +int		nanosleep(const struct timespec *req, struct timespec *rem);
 +unsigned int	sleep(unsigned int seconds);
 +int		gettimeofday(struct timeval *tv, void *tz);
@@ -74,7 +77,7 @@ index 31149e9bab8c340c4a8d6419fd7d45149130e42e..9c537a90ef3f417283b031f7654aa670
 +
  #endif
 diff --git a/include/common/zbxtypes.h b/include/common/zbxtypes.h
-index f765ecd027b1779710b0be1a6d68d6edb42d3cd6..c04a8212cdf944c49c70a1169efd9cceaf108ab6 100644
+index f8020fb621c710d00b3493f55e13ac2c70eba4bf..9eff1130b5692785dbfec963f75b93bdf9e52bf9 100644
 --- a/include/common/zbxtypes.h
 +++ b/include/common/zbxtypes.h
 @@ -26,12 +26,24 @@
@@ -114,11 +117,23 @@ index f765ecd027b1779710b0be1a6d68d6edb42d3cd6..c04a8212cdf944c49c70a1169efd9cce
  #endif
  
  typedef struct zbx_variant zbx_variant_t;
+@@ -209,10 +224,7 @@ typedef struct zbx_variant zbx_variant_t;
+ #define	SEND_ERROR	-10
+ #define	RECV_ERROR	-11
+ 
+-#if !defined(_WINDOWS)
+-/* database connection pool */
++/* database connection pool; the Windows build produces the proxy, which uses it, so no Unix guard here */
+ typedef struct zbx_dbconn_pool zbx_dbconn_pool_t;
+ 
+ #endif
+-
+-#endif
 diff --git a/include/zbxcommon.h b/include/zbxcommon.h
-index 70ee250f90477b35127ed4b21b4fbfa0790c5a9b..b8df3b8763ca0fbad13f4e9c4c136e55d896fa1a 100644
+index d72114d58fa147efd224b4965236e1411d46b58e..550657dc8696b609bc1840421d17519a13d54ec8 100644
 --- a/include/zbxcommon.h
 +++ b/include/zbxcommon.h
-@@ -451,6 +451,7 @@ typedef enum
+@@ -481,6 +481,7 @@ typedef enum
  	ZBX_TASK_START_SERVICE,
  	ZBX_TASK_STOP_SERVICE,
  	ZBX_TASK_SET_SERVICE_STARTUP_TYPE,
@@ -126,31 +141,35 @@ index 70ee250f90477b35127ed4b21b4fbfa0790c5a9b..b8df3b8763ca0fbad13f4e9c4c136e55
  #else
  	ZBX_TASK_RUNTIME_CONTROL,
  #endif
-@@ -805,7 +806,8 @@ int	zbx_get_log_level(void);
- void	zbx_set_log_level(int level);
- const char	*zbx_get_log_component_name(void);
+@@ -849,9 +850,12 @@ void	zbx_init_library_common(zbx_log_cb_t log_func, zbx_log_level_cb_t log_level
+ 		zbx_get_progname_f get_progname, zbx_backtrace_f backtrace);
  
--#ifndef _WINDOWS
-+/* The per-component log level is plain C. It was behind a Unix guard only because the agent has no use for it; the */
-+/* proxy worker pools do. */
- void		zabbix_increase_log_level(void);
- void		zabbix_decrease_log_level(void);
- void		zabbix_report_log_level_change(void);
-@@ -820,6 +822,9 @@ zbx_log_component_t;
- 
- void	zbx_set_log_component(const char *name, zbx_log_component_t *component);
- void	zbx_change_component_log_level(zbx_log_component_t *component, int direction);
-+
-+#ifndef _WINDOWS
+ #if !defined(_WINDOWS) && !defined(__MINGW32__)
+-
 +/* malloc_trim() is a glibc extension */
  void	zbx_malloc_trim(time_t now, int period, size_t pad);
- #endif
++#endif
  
++/* The exit hooks are not Unix-only: the Windows build runs its workers as threads and installs */
++/* zbx_exit_from_thread() in each of them, so that a worker that gives up ends only itself.      */
+ typedef void (*zbx_exit_cb_t)(int) ZBX_NORETURN;
+ 
+ void	zbx_exit(int ret) ZBX_NORETURN;
+@@ -862,9 +866,4 @@ void	zbx_set_exit_immediate(zbx_exit_cb_t exit_cb);
+ 
+ void	zbx_exit_from_thread(int ret) ZBX_NORETURN;
+ 
+-#else
+-#	define zbx_exit(status)		exit(status)
+-#	define zbx_exit_immediate(status)	_exit(status)
+-#endif
+-
+ #endif
 diff --git a/include/zbxnix.h b/include/zbxnix.h
-index 9a21943ae96e3b530d54dcd2c5ebd5796fef1ed4..4890834b51802bbd19c2171ce8c0ad07098de0dd 100644
+index d8310ee230517f2d4234de26444e32090578c0db..eb851a2d74552178b4395dedd4195a5171bc5955 100644
 --- a/include/zbxnix.h
 +++ b/include/zbxnix.h
-@@ -30,7 +30,11 @@ int	zbx_coredump_disable(void);
+@@ -30,7 +30,17 @@ int	zbx_coredump_disable(void);
  
  /* daemon start */
  #if defined(_WINDOWS)
@@ -160,10 +179,37 @@ index 9a21943ae96e3b530d54dcd2c5ebd5796fef1ed4..4890834b51802bbd19c2171ce8c0ad07
 +/* the signal-set operations are no-ops. Their callers still declare the mask they pass, so the type has to exist; */
 +/* MSVC does not provide it. */
 +typedef int	sigset_t;
++
++/* A worker thread on Unix arms a jump buffer so that a fatal signal lands it back in its entry function; there */
++/* are no such signals here and the structured exception handler in zbx_thread_start()'s entry covers the thread, */
++/* so the buffer is a placeholder and the jump never happens. */
++typedef int	sigjmp_buf;
++#	define sigsetjmp(env, savemask)	(ZBX_UNUSED(env), 0)
  #endif
  
  typedef int	(*zbx_get_process_info_by_thread_f)(int local_server_num, unsigned char *local_process_type,
-@@ -126,7 +130,8 @@ void	zbx_unset_exit_on_terminate(void);
+@@ -57,6 +67,12 @@ void	zbx_exit_thread(int ret) ZBX_NORETURN;
+ 
+ #define ZBX_THREAD_FAILURE	((void *)EXIT_FAILURE)
+ 
++#if defined(_WINDOWS)
++/* the exit hook is all a thread needs here: zbx_exit() then ends the thread alone, as pthread_exit() does on Unix */
++#define ZBX_INIT_THREAD_OR_RETURN(jmp_ret, unit_status)		\
++		ZBX_UNUSED(jmp_ret);				\
++		zbx_set_exit(zbx_exit_from_thread, unit_status)
++#else
+ #define ZBX_INIT_THREAD_OR_RETURN(jmp_ret, unit_status)		\
+ 		zbx_init_thread_signal_handler(&jmp_ret);	\
+ 		zbx_set_exit(zbx_exit_from_thread, unit_status);\
+@@ -64,6 +80,7 @@ void	zbx_exit_thread(int ret) ZBX_NORETURN;
+ 		{						\
+ 			zbx_exit(EXIT_FAILURE);			\
+ 		}
++#endif
+ 
+ int	zbx_daemon_start(int allow_root, const char *user, unsigned int flags,
+ 		zbx_get_config_str_f get_pid_file_cb, zbx_on_exit_t zbx_on_exit_cb_arg, int config_log_type,
+@@ -141,7 +158,8 @@ void	zbx_unset_exit_on_terminate(zbx_on_exit_t on_exit_cb);
  
  void	zbx_log_exit_signal(void);
  void	zbx_set_on_exit_args(void *args);
@@ -194,24 +240,25 @@ index cec9b880b422fdd04d76bb3ed754a6e77ebf6496..716de9adc1543e9d8e443b4042c41e00
  
  #endif	/* ZABBIX_ZBXSELF_H */
 diff --git a/include/zbxthreads.h b/include/zbxthreads.h
-index f3dd371603b652aeef508acd2d171c91048da8a7..399b4da57424f9a546066e5de18b1dc0fb1f809f 100644
+index e7cfb2dc105be8580997bff08726ebde2d0cb4b7..f9c8c06ce98b44e3544e3fb6a3b6bd163576f330 100644
 --- a/include/zbxthreads.h
 +++ b/include/zbxthreads.h
-@@ -17,6 +17,13 @@
+@@ -17,6 +17,14 @@
  
  #include "zbxcommon.h"
  
 +/* the order workers are asked to stop in, on either platform */
 +#define ZBX_THREAD_PRIORITY_NONE	0
 +#define ZBX_THREAD_PRIORITY_COLLECTOR	1
-+#define ZBX_THREAD_PRIORITY_SYNCER	2
-+#define ZBX_THREAD_PRIORITY_WORKER	3
-+#define ZBX_THREAD_PRIORITY_COUNT	4
++#define ZBX_THREAD_PRIORITY_SUPERVISOR	2
++#define ZBX_THREAD_PRIORITY_SYNCER	3
++#define ZBX_THREAD_PRIORITY_WORKER	4
++#define ZBX_THREAD_PRIORITY_COUNT	5
 +
  #if defined(_WINDOWS) || defined(__MINGW32__)
  	/* the ZBXEndThread function is implemented in service.c file */
  	void	CALLBACK ZBXEndThread(ULONG_PTR dwParam);
-@@ -26,8 +33,6 @@
+@@ -26,8 +34,6 @@
  	#define ZBX_THREAD_HANDLE		HANDLE
  	#define ZBX_THREAD_HANDLE_NULL		NULL
  
@@ -220,38 +267,22 @@ index f3dd371603b652aeef508acd2d171c91048da8a7..399b4da57424f9a546066e5de18b1dc0
  	#define ZBX_THREAD_ENTRY_POINTER(pointer_name)		\
  		unsigned (__stdcall *pointer_name)(void *)
  
-@@ -53,11 +58,6 @@
+@@ -53,12 +59,6 @@
  	#define ZBX_THREAD_HANDLE		pid_t
  	#define ZBX_THREAD_HANDLE_NULL		0
  
 -	#define ZBX_THREAD_PRIORITY_NONE	0
 -	#define ZBX_THREAD_PRIORITY_COLLECTOR	1
--	#define ZBX_THREAD_PRIORITY_SYNCER	2
--	#define ZBX_THREAD_PRIORITY_WORKER	3
--	#define ZBX_THREAD_PRIORITY_COUNT	4
+-	#define ZBX_THREAD_PRIORITY_SUPERVISOR	2
+-	#define ZBX_THREAD_PRIORITY_SYNCER	3
+-	#define ZBX_THREAD_PRIORITY_WORKER	4
+-	#define ZBX_THREAD_PRIORITY_COUNT	5
  
  	#define ZBX_THREAD_ENTRY_POINTER(pointer_name)	\
  		unsigned (* pointer_name)(void *)
-@@ -76,6 +76,16 @@
- 	#define zbx_thread_kill_fatal(h)	kill(h, SIGHUP)
- #endif	/* _WINDOWS */
- 
-+/* Ends a worker that has finished on its own: a process on Unix, where this is exit(), and a thread on      */
-+/* Windows, where exit() would end the whole program, every other worker and the service with it. Unlike      */
-+/* zbx_thread_exit() it keeps exit()'s semantics on Unix and can be used at any depth of the worker, as both   */
-+/* forms are declared noreturn.                                                                                */
-+#if defined(_WINDOWS) || defined(__MINGW32__)
-+	#define zbx_worker_exit(status)		_endthreadex((unsigned int)(status))
-+#else
-+	#define zbx_worker_exit(status)		exit((int)(status))
-+#endif
-+
- typedef struct
- {
- 	unsigned char	program_type;
-@@ -99,8 +109,6 @@ void	zbx_thread_start(ZBX_THREAD_ENTRY_POINTER(handler), zbx_thread_args_t *thre
- int	zbx_thread_wait(ZBX_THREAD_HANDLE thread);
- void	zbx_threads_kill_and_wait(ZBX_THREAD_HANDLE *threads, const int *threads_flags, int threads_num, int ret);
+@@ -101,8 +101,6 @@ int	zbx_thread_wait(ZBX_THREAD_HANDLE thread);
+ int	zbx_waitpid_nohang(ZBX_THREAD_HANDLE *threads, size_t threads_num);
+ void	zbx_threads_kill_and_wait(ZBX_THREAD_HANDLE *threads, const int *threads_flags, int threads_num, int timeout);
  
 -#if !defined(_WINDOWS) && !defined(__MINGW32__)
  void	zbx_pthread_init_attr(pthread_attr_t *attr);
@@ -259,7 +290,7 @@ index f3dd371603b652aeef508acd2d171c91048da8a7..399b4da57424f9a546066e5de18b1dc0
  
  #endif	/* ZABBIX_THREADS_H */
 diff --git a/include/zbxvariant.h b/include/zbxvariant.h
-index 8b0b2432727952ce8990e6d29f482bbe7ee0bad4..20f2deb060fdf7848858b206a51491dc548a4d16 100644
+index 243143d91a07487c5c94d561d3bfe48814f58a78..143c59f8bc635b57cfdd052cef5a9022f1e0d2f7 100644
 --- a/include/zbxvariant.h
 +++ b/include/zbxvariant.h
 @@ -17,8 +17,14 @@
@@ -278,10 +309,10 @@ index 8b0b2432727952ce8990e6d29f482bbe7ee0bad4..20f2deb060fdf7848858b206a51491dc
  #define ZBX_UNKNOWN_STR		"ZBX_UNKNOWN"	/* textual representation of ZBX_UNKNOWN */
  #define ZBX_UNKNOWN_STR_LEN	ZBX_CONST_STRLEN(ZBX_UNKNOWN_STR)
 diff --git a/include/zbxwinservice.h b/include/zbxwinservice.h
-index 70350dc53acab5b69de4ed48982589d0640e2829..d05ebc79f227563235e69220c4f9487a784344a6 100644
+index 70350dc53acab5b69de4ed48982589d0640e2829..ffa9d5f740638e800ec1349278dbccb7a064e1dd 100644
 --- a/include/zbxwinservice.h
 +++ b/include/zbxwinservice.h
-@@ -26,10 +26,13 @@
+@@ -26,10 +26,14 @@
  #define ZBX_SERVICE_STARTUP_MANUAL	"manual"
  #define ZBX_SERVICE_STARTUP_DISABLED	"disabled"
  
@@ -293,6 +324,7 @@ index 70350dc53acab5b69de4ed48982589d0640e2829..d05ebc79f227563235e69220c4f9487a
  void	zbx_service_start(int flags);
 +void	zbx_service_stop_from_main_thread(void);
 +void	zbx_service_report_stop_pending(void);
++void	zbx_service_set_stop_notify(void (*cb)(void));
  
  int	ZabbixCreateService(const char *path, const char *config_file, unsigned int flags);
  int	ZabbixRemoveService(void);

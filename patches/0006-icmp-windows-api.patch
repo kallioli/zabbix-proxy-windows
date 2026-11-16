@@ -4,7 +4,7 @@ One driver call pings every host due in the same second; no fping binary
 and no elevation needed.
 
 diff --git a/src/libs/zbxicmpping/icmpping.c b/src/libs/zbxicmpping/icmpping.c
-index afa2818d1e2e55d69f2f9b8b89040620ecc2494c..7d9d48b6e47276602397203379ebe85cd2faa8ac 100644
+index f7104efce721de404c32b583858def94f6b7a241..bee3235acbcdbeb6469b79ae7602125f1d371d3a 100644
 --- a/src/libs/zbxicmpping/icmpping.c
 +++ b/src/libs/zbxicmpping/icmpping.c
 @@ -27,6 +27,415 @@
@@ -423,16 +423,16 @@ index afa2818d1e2e55d69f2f9b8b89040620ecc2494c..7d9d48b6e47276602397203379ebe85c
  static const zbx_config_icmpping_t	*config_icmpping;
  
  /* old official fping (2.4b2_to_ipv6) did not support source IP address */
-@@ -1288,3 +1697,4 @@ int	zbx_ping(zbx_fping_host_t *hosts, int hosts_count, int requests_count, int p
+@@ -1287,3 +1696,4 @@ int	zbx_ping(zbx_fping_host_t *hosts, int hosts_count, int requests_count, int p
  
  	return ret;
  }
 +#endif	/* _WINDOWS */
 diff --git a/src/libs/zbxsysinfo/simple/simple.c b/src/libs/zbxsysinfo/simple/simple.c
-index 3bc324a08b1aef66e1b2520077a1974a7a414f9a..ba556f08578768e6b25e53c71a2fb3eedeccfce4 100644
+index b86bfc5f91ee6c5786a6a25b6fdb9a2c511ec610..5b31b026fef96c9f60e2c41b518915219c6b3152 100644
 --- a/src/libs/zbxsysinfo/simple/simple.c
 +++ b/src/libs/zbxsysinfo/simple/simple.c
-@@ -35,11 +35,17 @@
+@@ -32,11 +32,17 @@
  
  #ifdef HAVE_LDAP
  
@@ -450,7 +450,7 @@ index 3bc324a08b1aef66e1b2520077a1974a7a414f9a..ba556f08578768e6b25e53c71a2fb3ee
  
  static int	check_ldap(const char *host, unsigned short port, int timeout, int *value_int)
  {
-@@ -77,6 +83,7 @@ static int	check_ldap(const char *host, unsigned short port, int timeout, int *v
+@@ -74,6 +80,7 @@ static int	check_ldap(const char *host, unsigned short port, int timeout, int *v
  		}
  	}
  #endif
@@ -458,7 +458,7 @@ index 3bc324a08b1aef66e1b2520077a1974a7a414f9a..ba556f08578768e6b25e53c71a2fb3ee
  	tm.tv_sec = timeout;
  	tm.tv_usec = 0;
  
-@@ -85,6 +92,10 @@ static int	check_ldap(const char *host, unsigned short port, int timeout, int *v
+@@ -82,6 +89,10 @@ static int	check_ldap(const char *host, unsigned short port, int timeout, int *v
  		zabbix_log(LOG_LEVEL_DEBUG, "LDAP - failed to set network timeout [%s]", ldap_err2string(ldapErr));
  		goto lbl_ret;
  	}

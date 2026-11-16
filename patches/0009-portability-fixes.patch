@@ -1,7 +1,9 @@
 Portability: small MSVC / Windows fixes across shared code
 
 Name resolution, large configuration receive, rand(), DLL modules,
-ODBC, WMI, vault and VMware counters.
+ODBC, WMI, vault and VMware counters; on 8.0 also the per-component log
+level (Unix-only upstream) and a macro parameter named __out, which is an
+SAL annotation in the MSVC headers.
 
 diff --git a/include/zbxcompress.h b/include/zbxcompress.h
 index 12d08c51759827be59953dcc8d7f6842fb38e678..b26759215d0a10603a417ed0bd265da71b60a379 100644
@@ -14,11 +16,33 @@ index 12d08c51759827be59953dcc8d7f6842fb38e678..b26759215d0a10603a417ed0bd265da7
 +size_t	zbx_compress_max_size(void);
  
  #endif
+diff --git a/include/zbxlog.h b/include/zbxlog.h
+index b0d26329aac0f83b0ef1a75a445f165bdc2cbf7c..4ccfa9fec291908cdc9646cf14fc7f53de0e640a 100644
+--- a/include/zbxlog.h
++++ b/include/zbxlog.h
+@@ -85,7 +85,8 @@ int	zbx_set_log_level(int level);
+ 
+ const char	*zbx_get_log_component_name(void);
+ 
+-#ifndef _WINDOWS
++/* The per-component log level is plain C. It was behind a Unix guard only because the agent has no use for it; the */
++/* proxy worker pools do, on Windows as well. */
+ void	zabbix_increase_log_level(void);
+ void	zabbix_decrease_log_level(void);
+ void	zabbix_report_log_level_change(void);
+@@ -96,7 +97,6 @@ const char	*zabbix_get_log_level_string(void);
+ void	zbx_set_log_component(const char *name, zbx_log_component_t *component);
+ void	zbx_change_component_log_level(zbx_log_component_t *component, int direction);
+ void	zbx_change_component_log_level_silent(zbx_log_component_t *component, int direction);
+-#endif
+ 
+ 
+ 
 diff --git a/src/libs/zbxcfg/cfg.c b/src/libs/zbxcfg/cfg.c
-index 874dd33d64b2510d7fd57c173d07c6ad70c7da37..86433a1d3d8d2885a11df4189d8eaa4a716cc0d3 100644
+index 2de1bc4e0da173206c79c66f901fcbfe52104f97..baa27e648ad9acb3aa2e98002ebc4c8f80c90390 100644
 --- a/src/libs/zbxcfg/cfg.c
 +++ b/src/libs/zbxcfg/cfg.c
-@@ -25,7 +25,11 @@
+@@ -26,7 +26,11 @@
  #endif
  
  #if defined(_WINDOWS) || defined(__MINGW32__)
@@ -31,10 +55,10 @@ index 874dd33d64b2510d7fd57c173d07c6ad70c7da37..86433a1d3d8d2885a11df4189d8eaa4a
  #include <libgen.h>
  #endif
 diff --git a/src/libs/zbxcomms/comms.c b/src/libs/zbxcomms/comms.c
-index 399ec29453ed0662cc235064d5006dee22987123..6c161709b098ffc9af630d7a6d1d16341bd515ea 100644
+index 585baf04dc029b7205a0096bab810ec1924dbacb..15a48d38e43568f27584389411f7b4403054e53e 100644
 --- a/src/libs/zbxcomms/comms.c
 +++ b/src/libs/zbxcomms/comms.c
-@@ -181,7 +181,7 @@ static int	zbx_socket_peer_ip_save(zbx_socket_t *s)
+@@ -190,7 +190,7 @@ static int	zbx_socket_peer_ip_save(zbx_socket_t *s)
  	return SUCCEED;
  }
  
@@ -43,15 +67,15 @@ index 399ec29453ed0662cc235064d5006dee22987123..6c161709b098ffc9af630d7a6d1d1634
  /**
  *******************************************************************************
   *                                                                            *
-@@ -317,7 +317,6 @@ out:
- 		freeaddrinfo(ai);
+@@ -352,7 +352,6 @@ out:
+ #endif
  }
  
 -#endif	/* _WINDOWS */
  
  #ifdef _WINDOWS
  /******************************************************************************
-@@ -2102,12 +2101,8 @@ void	zbx_tcp_recv_context_init(zbx_socket_t *s, zbx_tcp_recv_context_t *tcp_recv
+@@ -2238,12 +2237,8 @@ void	zbx_tcp_recv_context_init(zbx_socket_t *s, zbx_tcp_recv_context_t *tcp_recv
  	{
  		tcp_recv_context->max_len = s->max_len_limit;
  	}
@@ -66,7 +90,7 @@ index 399ec29453ed0662cc235064d5006dee22987123..6c161709b098ffc9af630d7a6d1d1634
  	else if (0 != (flags & ZBX_TCP_LARGE))
  	{
  		tcp_recv_context->max_len = ZBX_MAX_RECV_LARGE_DATA_SIZE;
-@@ -2116,7 +2111,6 @@ void	zbx_tcp_recv_context_init(zbx_socket_t *s, zbx_tcp_recv_context_t *tcp_recv
+@@ -2252,7 +2247,6 @@ void	zbx_tcp_recv_context_init(zbx_socket_t *s, zbx_tcp_recv_context_t *tcp_recv
  	{
  		tcp_recv_context->max_len = ZBX_MAX_RECV_DATA_SIZE;
  	}
@@ -74,7 +98,7 @@ index 399ec29453ed0662cc235064d5006dee22987123..6c161709b098ffc9af630d7a6d1d1634
  	zbx_socket_free(s);
  	tcp_recv_context->allocated = 0;
  
-@@ -2244,6 +2238,17 @@ ssize_t	zbx_tcp_recv_context(zbx_socket_t *s, zbx_tcp_recv_context_t *context, u
+@@ -2380,6 +2374,17 @@ ssize_t	zbx_tcp_recv_context(zbx_socket_t *s, zbx_tcp_recv_context_t *context, u
  				goto out;
  			}
  
@@ -116,7 +140,7 @@ index 34ef178fcf09034786781b08d5f7cd0c5c82606f..5b56da9c48096590373a0c79f975e0a9
  #	define ZBX_SOCKET_ERROR			INVALID_SOCKET
  #else
 diff --git a/src/libs/zbxcomms/tls_openssl.c b/src/libs/zbxcomms/tls_openssl.c
-index f03e1b238c25261269e605e26d3f9364da6893ea..664f5f040107a5df27a4db15d571319de14d7ad2 100644
+index f2961f32b26d2a687579fd12a180a9cdbf08ad27..9ac13b00d893381d2c4476e423e15c7a304d66cb 100644
 --- a/src/libs/zbxcomms/tls_openssl.c
 +++ b/src/libs/zbxcomms/tls_openssl.c
 @@ -2098,7 +2098,8 @@ ssize_t	zbx_tls_write(zbx_socket_t *s, const char *buf, size_t len, short *event
@@ -206,10 +230,10 @@ index bf58b6054d98a7474cd05de67bfd540de183a352..03f4a79d3bda296246bad6eab24148ee
 +#endif
 +}
 diff --git a/src/libs/zbxeval/execute.c b/src/libs/zbxeval/execute.c
-index 98dbda8d72cdfb0df0ae37d7ef6f2609bc57ef9d..ec8690730a7b646a2b936b38b92817026c2431cc 100644
+index 389582fd2411af59c507f4fd6b24809a5db3e41d..8135b61d11668b7d9419b03cd768255a5b5f36ac 100644
 --- a/src/libs/zbxeval/execute.c
 +++ b/src/libs/zbxeval/execute.c
-@@ -2650,6 +2650,15 @@ static int	eval_execute_math_return_value(const zbx_eval_context_t *ctx, const z
+@@ -2669,6 +2669,15 @@ static int	eval_execute_math_return_value(const zbx_eval_context_t *ctx, const z
  
  	if (ZBX_MATH_RANDOM == value)
  	{
@@ -225,7 +249,7 @@ index 98dbda8d72cdfb0df0ae37d7ef6f2609bc57ef9d..ec8690730a7b646a2b936b38b9281702
  		struct timespec ts;
  
  		if (SUCCEED != clock_gettime(CLOCK_MONOTONIC, &ts))
-@@ -2662,6 +2671,7 @@ static int	eval_execute_math_return_value(const zbx_eval_context_t *ctx, const z
+@@ -2681,6 +2690,7 @@ static int	eval_execute_math_return_value(const zbx_eval_context_t *ctx, const z
  			srandom((unsigned int)(ts.tv_nsec ^ ts.tv_sec));
  			zbx_variant_set_dbl(&ret_value, random());
  		}
@@ -233,26 +257,6 @@ index 98dbda8d72cdfb0df0ae37d7ef6f2609bc57ef9d..ec8690730a7b646a2b936b38b9281702
  	}
  	else
  		zbx_variant_set_dbl(&ret_value, value);
-diff --git a/src/libs/zbxexpression/evalsimple.c b/src/libs/zbxexpression/evalsimple.c
-index af0546821a15d1429ff8582f8fc2df37d56b1099..89741205d4152feb5cb23cd4cfb52ee81638f8aa 100644
---- a/src/libs/zbxexpression/evalsimple.c
-+++ b/src/libs/zbxexpression/evalsimple.c
-@@ -45,10 +45,12 @@
-  ******************************************************************************/
- 
- static const char	*ptr;		/* character being looked at */
--static int		level;		/* expression nesting level  */
-+static ZBX_THREAD_LOCAL int	level;			/* expression nesting level  */
- 
--static char		*buffer;	/* error message buffer      */
--static size_t		max_buffer_len;	/* error message buffer size */
-+/* The caller's error buffer, held across the recursive descent. Several workers evaluate at once and they are */
-+/* threads here, so each has to write to the buffer its own caller passed in. */
-+static ZBX_THREAD_LOCAL char	*buffer;		/* error message buffer      */
-+static ZBX_THREAD_LOCAL size_t	max_buffer_len;		/* error message buffer size */
- 
- /******************************************************************************
-  *                                                                            *
 diff --git a/src/libs/zbxhash/sha512crypt.c b/src/libs/zbxhash/sha512crypt.c
 index fce7014509e34d69911ff64039da072d7aa71d50..d135650e24a343b177422632f2028a3df0cb14ce 100644
 --- a/src/libs/zbxhash/sha512crypt.c
@@ -269,10 +273,10 @@ index fce7014509e34d69911ff64039da072d7aa71d50..d135650e24a343b177422632f2028a3d
  	#if defined(ZBX_OLD_SOLARIS)
  		#include <sys/isa_defs.h>
 diff --git a/src/libs/zbxjson/jsonpath.c b/src/libs/zbxjson/jsonpath.c
-index 35e2863d15eb47ab9ff797bfd99081ed9815f336..1cd13045c3fb48d372115d8ee26c2662c863e32f 100644
+index 3f1470b94a60e2389d474e6f593d44d82a81c58d..dafbb78d7de880d5c45d9500f26d7d8fa1f92421 100644
 --- a/src/libs/zbxjson/jsonpath.c
 +++ b/src/libs/zbxjson/jsonpath.c
-@@ -47,7 +47,7 @@ zbx_jsonobj_index_t;
+@@ -46,7 +46,7 @@ zbx_jsonobj_index_t;
  ZBX_PTR_VECTOR_DECL(jsonobj_index_ptr, zbx_jsonobj_index_t *)
  ZBX_PTR_VECTOR_IMPL(jsonobj_index_ptr, zbx_jsonobj_index_t *)
  
@@ -281,7 +285,7 @@ index 35e2863d15eb47ab9ff797bfd99081ed9815f336..1cd13045c3fb48d372115d8ee26c2662
  struct zbx_jsonpath_index
  {
  	zbx_vector_jsonobj_index_ptr_t	indexes;
-@@ -57,7 +57,6 @@ struct zbx_jsonpath_index
+@@ -56,7 +56,6 @@ struct zbx_jsonpath_index
  static zbx_hashset_t	*jsonpath_index_get(zbx_jsonpath_index_t *index, const zbx_jsonobj_t *obj,
  		zbx_jsonpath_token_t *token);
  
@@ -289,7 +293,7 @@ index 35e2863d15eb47ab9ff797bfd99081ed9815f336..1cd13045c3fb48d372115d8ee26c2662
  
  static int	jsonpath_query_object(zbx_jsonpath_context_t *ctx, const zbx_jsonobj_t *obj, int path_depth);
  static int	jsonpath_query_array(zbx_jsonpath_context_t *ctx, const zbx_jsonobj_t *array, int path_depth);
-@@ -2945,7 +2944,7 @@ int	zbx_jsonobj_query(const zbx_jsonobj_t *obj, const char *path, char **output)
+@@ -3017,7 +3016,7 @@ int	zbx_jsonobj_query(const zbx_jsonobj_t *obj, const char *path, char **output)
  	return zbx_jsonobj_query_ext(obj, NULL, path, output);
  }
  
@@ -298,10 +302,28 @@ index 35e2863d15eb47ab9ff797bfd99081ed9815f336..1cd13045c3fb48d372115d8ee26c2662
  /* jsonobject index hashset support */
  
  static zbx_hash_t	jsonobj_index_el_hash(const void *v)
-@@ -3190,4 +3189,3 @@ void	zbx_jsonpath_index_free(zbx_jsonpath_index_t *index)
+@@ -3262,4 +3261,3 @@ void	zbx_jsonpath_index_free(zbx_jsonpath_index_t *index)
  	zbx_free(index);
  }
  
+-#endif
+diff --git a/src/libs/zbxlog/log.c b/src/libs/zbxlog/log.c
+index 5aceb8c32c3283e71b5cdac592ce3733e0cfbdcd..bca53aeb309df3122d6baaa5d2f06f9138fed2e4 100644
+--- a/src/libs/zbxlog/log.c
++++ b/src/libs/zbxlog/log.c
+@@ -853,7 +853,7 @@ const char	*zbx_get_log_component_name(void)
+ 	return log_component_name;
+ }
+ 
+-#ifndef _WINDOWS
++/* the per-component log level is portable; see zbxlog.h */
+ static const char	*zabbix_get_log_level_ref_string(int loglevel)
+ {
+ 	switch (loglevel)
+@@ -1022,4 +1022,3 @@ void	zbx_change_component_log_level_silent(zbx_log_component_t *component, int d
+ 			component->level += direction;
+ 	}
+ }
 -#endif
 diff --git a/src/libs/zbxmodules/modules.c b/src/libs/zbxmodules/modules.c
 index a19d574202f0445f5ceae0213d9e5445208ede65..756e1d6dcdefe638bb6135ff0ff712a89db585f4 100644
@@ -421,11 +443,30 @@ index 77c3b08014c62160d56514881444f22c6fbbaee0..8e17582deb0ea285a3b0ed8e2d4a2e26
  extern "C"
  {
  #	include "../sysinfo.h"
+diff --git a/src/libs/zbxtelemetry/telemetry_query_parse.c b/src/libs/zbxtelemetry/telemetry_query_parse.c
+index 7b4bdf715e70593187f26f31675471c7addb9546..9328782796bb8cb78827798d5fdb5863ffe473c4 100644
+--- a/src/libs/zbxtelemetry/telemetry_query_parse.c
++++ b/src/libs/zbxtelemetry/telemetry_query_parse.c
+@@ -86,10 +86,11 @@ static int	tq_read_int_enum(const char *p, char **buf, size_t *buf_alloc, tq_int
+ 	return SUCCEED;
+ }
+ 
+-#define TQ_INT_ENUM_SET_FUNC_DEF(__set_func_name, __match_func, __type)	\
+-static int	__set_func_name(int __x, void *__out)		\
++/* the parameter names keep clear of the double underscore: __out is an SAL annotation macro in the MSVC headers */
++#define TQ_INT_ENUM_SET_FUNC_DEF(set_func_name_, match_func_, type_)	\
++static int	set_func_name_(int x_, void *out_)			\
+ {								\
+-	return (int)(*(__type *)__out = __match_func(__x));	\
++	return (int)(*(type_ *)out_ = match_func_(x_));		\
+ }
+ 
+ static zbx_tq_signal_type_t	tq_match_signal_type(int x)
 diff --git a/src/libs/zbxvault/vault.c b/src/libs/zbxvault/vault.c
-index ca1aaa06ed8332ed37d092013302a391eb0460f2..7fcefe5b27fb8bcff4bca10f4bf0698be5618d53 100644
+index c017d543ca8058ba53acc4ff4e73b2b22fa924d2..1ae358e7da4c7016aacd8cd509c2f94f7d32fb04 100644
 --- a/src/libs/zbxvault/vault.c
 +++ b/src/libs/zbxvault/vault.c
-@@ -189,7 +189,7 @@ int	zbx_vault_token_from_env_get(char **token, char **error)
+@@ -377,7 +377,7 @@ int	zbx_vault_token_from_env_get(char **token, char **error)
  	*token = zbx_strdup(NULL, ptr);
  	unsetenv("VAULT_TOKEN");
  #else
@@ -435,7 +476,7 @@ index ca1aaa06ed8332ed37d092013302a391eb0460f2..7fcefe5b27fb8bcff4bca10f4bf0698b
  #endif
  	return SUCCEED;
 diff --git a/src/libs/zbxvmware/vmware_perfcntr.c b/src/libs/zbxvmware/vmware_perfcntr.c
-index acfa1eecaf61dda8be716ea2912ba098a61f44f0..66affd5e573f5cea27d6710d49829113dca4f6bd 100644
+index 58ae257de90fc9c7871cc8f42a1cc35b1ac62266..63c9c4fc730281bcbb1c6b47a77ba44e39dbd34d 100644
 --- a/src/libs/zbxvmware/vmware_perfcntr.c
 +++ b/src/libs/zbxvmware/vmware_perfcntr.c
 @@ -15,6 +15,7 @@
@@ -446,12 +487,3 @@ index acfa1eecaf61dda8be716ea2912ba098a61f44f0..66affd5e573f5cea27d6710d49829113
  
  #if defined(HAVE_LIBXML2) && defined(HAVE_LIBCURL)
  
-@@ -1531,7 +1532,7 @@ out:
- 				" up to " ZBX_FS_UI64 " bytes of free VMwareCache memory. Available " ZBX_FS_UI64
- 				" bytes. Increase value of VMwareCacheSize", perf_data_sz,
- 				vmware_shmem_get_vmware_mem()->free_size);
--		exit(EXIT_SUCCESS);
-+		zbx_worker_exit(EXIT_SUCCESS);
- 	}
- 	else
- 	{

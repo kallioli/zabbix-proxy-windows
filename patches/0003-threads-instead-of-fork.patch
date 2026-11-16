@@ -2,29 +2,11 @@ Process model: every forked worker becomes a thread of one process
 
 Main loop, signal and fatal-error handling, self-monitoring, runtime
 control and the Windows service layer, rewritten for a single-process,
-multi-threaded proxy.
+multi-threaded proxy. On 8.0 the supervisor runs its units as threads too:
+every worker gets its own copy of its arguments, zbx_exit() ends the
+calling thread alone, the main loop polls thread handles instead of
+waitpid(), and the supervisor leaves the shared libraries alone at exit.
 
-diff --git a/src/libs/zbxcommon/common_log.c b/src/libs/zbxcommon/common_log.c
-index ae214bbc0574c570ed0984bc0488807ef1ca6eb7..4b9017a33c1d556b0ade2cecfd92e42af4d1f539 100644
---- a/src/libs/zbxcommon/common_log.c
-+++ b/src/libs/zbxcommon/common_log.c
-@@ -68,7 +68,7 @@ const char	*zbx_get_log_component_name(void)
- 	return log_component_name;
- }
- 
--#ifndef _WINDOWS
-+/* the per-component log level is portable; see zbxcommon.h */
- static const char	*zabbix_get_log_level_ref_string(int loglevel)
- {
- 	switch (loglevel)
-@@ -215,7 +215,6 @@ void	zbx_change_component_log_level(zbx_log_component_t *component, int directio
- 		}
- 	}
- }
--#endif
- 
- /******************************************************************************
-  *                                                                            *
 diff --git a/src/libs/zbxcommon/cuid.c b/src/libs/zbxcommon/cuid.c
 index bcd9c8b79aa77ccc6513f3ebd9444991c05bf06d..4c57347132663239d99c74b30c940c9af921132b 100644
 --- a/src/libs/zbxcommon/cuid.c
@@ -56,10 +38,46 @@ index bcd9c8b79aa77ccc6513f3ebd9444991c05bf06d..4c57347132663239d99c74b30c940c9a
  	hostname_len = strlen(hostname);
  	hostname_num = hostname_len + CUID_BASE_36;
 diff --git a/src/libs/zbxcommon/misc.c b/src/libs/zbxcommon/misc.c
-index 14fe374d8fff8db33442a183154f7c62e05bab61..44607e4ad9a28b09d509177d279cc9217b034dba 100644
+index 459d5dc969a67678777142de39202bc7d0beefa8..9ccfaecf834dd21da9eaf9b26744a34003fff88d 100644
 --- a/src/libs/zbxcommon/misc.c
 +++ b/src/libs/zbxcommon/misc.c
-@@ -415,7 +415,32 @@ void	zbx_alarm_flag_clear(void)
+@@ -17,6 +17,7 @@
+ 
+ #if defined(_WINDOWS) || defined(__MINGW32__)
+ #	include <stddef.h>
++#	include <process.h>
+ #endif
+ 
+ #include "zbxcommon.h"
+@@ -29,8 +30,9 @@
+ 
+ static ZBX_THREAD_LOCAL volatile sig_atomic_t	zbx_timed_out;	/* 0 - no timeout occurred, 1 - SIGALRM took place */
+ 
+-#if !defined(_WINDOWS) && !defined(__MINGW32__)
+-
++/* The exit hooks are per thread so that a worker running as a thread of a larger process ends only itself. That */
++/* is what the supervisor units do on every platform, and what every worker of the Windows build does, where the */
++/* workers are threads rather than forked processes. */
+ static ZBX_THREAD_LOCAL void	(*zbx_exit_impl)(int) = exit;
+ static ZBX_THREAD_LOCAL void	(*zbx_exit_immediate_impl)(int) = _exit;
+ static ZBX_THREAD_LOCAL zbx_atomic_uint32_t	*zbx_exit_num;
+@@ -64,10 +66,13 @@ void	zbx_exit_from_thread(int ret)
+ 	if (NULL != zbx_exit_num)
+ 		atomic_fetch_add(zbx_exit_num, 1);
+ #endif
++#if defined(_WINDOWS) || defined(__MINGW32__)
++	/* the threads are started with _beginthreadex(), and this is its counterpart */
++	_endthreadex((unsigned int)ret);
++#else
+ 	pthread_exit((void *)(zbx_int64_t)ret);
+-}
+-
+ #endif
++}
+ 
+ #if defined(_WINDOWS) || defined(__MINGW32__)
+ 
+@@ -456,7 +461,32 @@ void	zbx_alarm_flag_clear(void)
  	zbx_timed_out = 0;
  }
  
@@ -94,10 +112,10 @@ index 14fe374d8fff8db33442a183154f7c62e05bab61..44607e4ad9a28b09d509177d279cc921
  {
  	zbx_alarm_flag_clear();
 diff --git a/src/libs/zbxnix/sighandler.c b/src/libs/zbxnix/sighandler.c
-index 2cdf44bee692482b58b1cf309b2074022bde359a..212719ee7316acafb60d1a00be90a3f9eedd8d1f 100644
+index b9619a12aca315eafcc92c02d4800d0a8ab80d5f..139b25533353e25f1352dc41ed24b96a12697251 100644
 --- a/src/libs/zbxnix/sighandler.c
 +++ b/src/libs/zbxnix/sighandler.c
-@@ -453,7 +453,7 @@ void	zbx_set_on_exit_args(void *args)
+@@ -470,7 +470,7 @@ void	zbx_set_on_exit_args(void *args)
  	zbx_on_exit_args = args;
  }
  
@@ -107,10 +125,10 @@ index 2cdf44bee692482b58b1cf309b2074022bde359a..212719ee7316acafb60d1a00be90a3f9
  	child_pids = pids;
  	child_pid_count = pid_num;
 diff --git a/src/libs/zbxrtc/rtc_client.c b/src/libs/zbxrtc/rtc_client.c
-index 615dec6889beaac62edd0889dcb186d339eb8e68..2801b3030027e5d54848c6c9c8c78fb2ed0bf3c4 100644
+index efdcad10d691f6c0702ea7ee77cc87d9c55130e1..bfdf232cdebd181e279d5f9423adfc87721047d0 100644
 --- a/src/libs/zbxrtc/rtc_client.c
 +++ b/src/libs/zbxrtc/rtc_client.c
-@@ -507,7 +507,9 @@ int	zbx_rtc_async_exchange(char **data, zbx_uint32_t code, int config_timeout, c
+@@ -589,7 +589,9 @@ int	zbx_rtc_async_exchange(char **data, zbx_uint32_t code, int config_timeout, c
  	unsigned char	*result = NULL;
  	int				ret;
  
@@ -122,10 +140,10 @@ index 615dec6889beaac62edd0889dcb186d339eb8e68..2801b3030027e5d54848c6c9c8c78fb2
  	{
  		/* allow only socket based runtime control options */
 diff --git a/src/libs/zbxrtc/rtc_service.c b/src/libs/zbxrtc/rtc_service.c
-index a6e4fcc0fe557c4b751e05cccbdc91564ddb0f3e..bcabf138482a3947c35dfc487f2a2f618080b277 100644
+index e49a90f0c491e92c154c285ec8d31799a7471299..ca21bba40228e3b9c386adfa1b5ee1dc104cdf36 100644
 --- a/src/libs/zbxrtc/rtc_service.c
 +++ b/src/libs/zbxrtc/rtc_service.c
-@@ -131,7 +131,10 @@ int	zbx_rtc_get_command_target(const char *data, pid_t *pid, int *proc_type, int
+@@ -138,7 +138,10 @@ int	zbx_rtc_get_command_target(const char *data, pid_t *pid, int *proc_type, int
  	return SUCCEED;
  }
  
@@ -137,7 +155,7 @@ index a6e4fcc0fe557c4b751e05cccbdc91564ddb0f3e..bcabf138482a3947c35dfc487f2a2f61
  
  /******************************************************************************
   *                                                                            *
-@@ -526,7 +529,7 @@ static void	rtc_process_request(zbx_rtc_t *rtc, zbx_uint32_t code, const unsigne
+@@ -958,7 +961,7 @@ static void	rtc_process_request(zbx_rtc_t *rtc, zbx_uint32_t code, const unsigne
  
  	switch (code)
  	{
@@ -147,7 +165,7 @@ index a6e4fcc0fe557c4b751e05cccbdc91564ddb0f3e..bcabf138482a3947c35dfc487f2a2f61
  		case ZBX_RTC_LOG_LEVEL_DECREASE:
  			rtc_process_loglevel_option(rtc, code, (const char *)data, result);
 diff --git a/src/libs/zbxself/selfmon.c b/src/libs/zbxself/selfmon.c
-index 3b7b4723757712bd84a8b683d9cb223583fb86fc..d4e93cb67a293d5c4c9b658e7d22269420e61bcc 100644
+index 395cceb162eefd9a29949ceec8694b9c45579e08..b75def5a7685e57e24134316b08ac3e59d8c5d23 100644
 --- a/src/libs/zbxself/selfmon.c
 +++ b/src/libs/zbxself/selfmon.c
 @@ -17,7 +17,7 @@
@@ -176,35 +194,105 @@ index 3b7b4723757712bd84a8b683d9cb223583fb86fc..d4e93cb67a293d5c4c9b658e7d222694
  
  static int	selfmon_is_process_monitored(unsigned char proc_type)
  {
-@@ -303,8 +302,6 @@ out:
- 	return ret;
- }
- 
--static int	sleep_remains;
--
- /******************************************************************************
-  *                                                                            *
-  * Purpose: sleeping process                                                  *
-@@ -315,6 +312,12 @@ static int	sleep_remains;
-  ******************************************************************************/
- void	zbx_sleep_loop(const zbx_thread_info_t *info, int sleeptime)
- {
-+	/* The remaining time used to be a file-scope static, which is private to each forked worker on Unix */
-+	/* but shared by every worker thread of the Windows build: a thread setting it for its own sleep cut  */
-+	/* another thread's sleep short or stretched it, and the self-monitoring collector, which relies on   */
-+	/* waking once a second, drifted with it. A local keeps each thread's count to itself.                */
-+	int	sleep_remains;
-+
- 	if (0 >= sleeptime)
- 		return;
- 
-@@ -365,4 +368,3 @@ ZBX_THREAD_ENTRY(zbx_selfmon_thread, args)
+@@ -366,4 +365,3 @@ ZBX_THREAD_ENTRY(zbx_selfmon_thread, args)
  	while (1)
  		zbx_sleep(SEC_PER_MIN);
  }
 -#endif
+diff --git a/src/libs/zbxsupervisor/supervisor.c b/src/libs/zbxsupervisor/supervisor.c
+index 69bf62f5d8fb64c83c0af20c8396d63b86dd8d60..583b85ef6d83228bb18d7a2bd1b6b4b575383cc8 100644
+--- a/src/libs/zbxsupervisor/supervisor.c
++++ b/src/libs/zbxsupervisor/supervisor.c
+@@ -968,6 +968,13 @@ static void	supervisor_init_libraries(const char *progname)
+ 
+ static void	supervisor_clear_libraries(const char *progname)
+ {
++#if defined(_WINDOWS)
++	/* The supervisor is a thread of the one proxy process here, not a process of its own, and these libraries */
++	/* are shared with every other worker thread, some of which are still finishing their last request when   */
++	/* the supervisor leaves. Tearing the libraries down from under them would crash the stop; the process    */
++	/* exit that follows releases everything.                                                                 */
++	ZBX_UNUSED(progname);
++#else
+ #ifndef HAVE_NETSNMP
+ 	ZBX_UNUSED(progname);
+ #endif
+@@ -987,6 +994,7 @@ static void	supervisor_clear_libraries(const char *progname)
+ #ifdef HAVE_ARES_QUERY_CACHE
+ 	ares_library_cleanup();
+ #endif
++#endif
+ }
+ 
+ /******************************************************************************
+diff --git a/src/libs/zbxthreads/threads.c b/src/libs/zbxthreads/threads.c
+index f0e3b92a06832a93690303cb3607bd2708f77759..3d0ac20bb66dc7c90c3bd6c8cfe3d9c1c965a18f 100644
+--- a/src/libs/zbxthreads/threads.c
++++ b/src/libs/zbxthreads/threads.c
+@@ -24,6 +24,13 @@ static ZBX_THREAD_ENTRY(zbx_win_thread_entry, args)
+ 	{
+ 		zbx_thread_args_t	*thread_args = (zbx_thread_args_t *)args;
+ 
++		/* The proxy workers are threads of one process here, where they are forked processes on Unix. A worker */
++		/* that gives up calls zbx_exit(), which must then end the thread alone, the way the exit of a forked   */
++		/* worker ends only that worker: the main thread notices the ended thread and shuts the proxy down in  */
++		/* order. The agent keeps exit() as before.                                                            */
++		if (0 != (thread_args->info.program_type & ZBX_PROGRAM_TYPE_PROXY))
++			zbx_set_exit(zbx_exit_from_thread, NULL);
++
+ 		return thread_args->entry(thread_args);
+ 	}
+ 	__except(zbx_win_seh_handler(GetExceptionInformation()))
+@@ -441,4 +448,47 @@ int	zbx_waitpid_nohang(ZBX_THREAD_HANDLE *threads, size_t threads_num)
+ 
+ 	return SUCCEED;
+ }
++#else
++/******************************************************************************
++ *                                                                            *
++ * Purpose: checks for a worker thread that has ended without blocking        *
++ *                                                                            *
++ * Parameters: threads     - [IN/OUT] the worker thread handles               *
++ *             threads_num - [IN] number of handles in the array              *
++ *                                                                            *
++ * Return value: SUCCEED - an ended thread was found and its handle cleared   *
++ *               FAIL    - every worker is still running                      *
++ *                                                                            *
++ * Comments: Counterpart of the waitpid() form above. Each handle is polled   *
++ *           on its own rather than through WaitForMultipleObjects(), whose   *
++ *           limit of 64 objects a proxy can exceed. The exit code is logged  *
++ *           the way the Unix form logs a non-zero exit status.               *
++ *                                                                            *
++ ******************************************************************************/
++int	zbx_waitpid_nohang(ZBX_THREAD_HANDLE *threads, size_t threads_num)
++{
++	for (size_t i = 0; i < threads_num; i++)
++	{
++		DWORD	code = 0;
++
++		if (ZBX_THREAD_HANDLE_NULL == threads[i] || (ZBX_THREAD_HANDLE)ZBX_THREAD_ERROR == threads[i])
++			continue;
++
++		if (WAIT_OBJECT_0 != WaitForSingleObject(threads[i], 0))
++			continue;
++
++		if (0 == GetExitCodeThread(threads[i], &code))
++			code = 0;
++
++		if (0 != code)
++			zbx_error("worker thread #%d exited (exitcode:%lu).", (int)i + 1, (unsigned long)code);
++
++		CloseHandle(threads[i]);
++		threads[i] = ZBX_THREAD_HANDLE_NULL;
++
++		return SUCCEED;
++	}
++
++	return FAIL;
++}
+ #endif
 diff --git a/src/libs/zbxtimekeeper/timekeeper.c b/src/libs/zbxtimekeeper/timekeeper.c
-index 1d8a556dbe9f487556da95312ad3448d9b3f77ec..8242be22940ea9ef96fc38e2d9837874d46e7b63 100644
+index b54522ae50973c3173895c13bfab0c50daa12190..d3bd76a9464339a49c2f63d33f5248c96e852c30 100644
 --- a/src/libs/zbxtimekeeper/timekeeper.c
 +++ b/src/libs/zbxtimekeeper/timekeeper.c
 @@ -16,6 +16,25 @@
@@ -294,7 +382,7 @@ index 1d8a556dbe9f487556da95312ad3448d9b3f77ec..8242be22940ea9ef96fc38e2d9837874
 +	if (0 != (err = zbx_tk_mutex_init(mutex)))
  	{
  		zabbix_log(LOG_LEVEL_CRIT, "cannot initialize timekeeper mutex: %s", zbx_strerror(err));
- 		exit(EXIT_FAILURE);
+ 		zbx_exit(EXIT_FAILURE);
 @@ -167,9 +200,9 @@ static zbx_timekeeper_sync_t	*timekeeper_create_thread_sync(void)
   ******************************************************************************/
  static void	timekeeper_free_thread_sync(zbx_timekeeper_sync_t *sync)
@@ -401,7 +489,7 @@ index b50f172aa3d95ce308e4c80545b6a39fe58980c1..aefc0a08896c908268d8a277da42dd32
  
  	print_fatal_info(ep->ContextRecord);
 diff --git a/src/libs/zbxwinservice/service.c b/src/libs/zbxwinservice/service.c
-index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d0bd541b2 100644
+index e88b58744c4036c0aed4040f442d695c1acadd9d..9fa93bd8f9c5cfd913389a8f75534f86ae58311d 100644
 --- a/src/libs/zbxwinservice/service.c
 +++ b/src/libs/zbxwinservice/service.c
 @@ -14,6 +14,7 @@
@@ -420,7 +508,49 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  
  #define ZBX_APP_STOPPED	0
  #define ZBX_APP_RUNNING	1
-@@ -50,6 +52,54 @@ void	ZBX_DO_EXIT(void)
+@@ -35,14 +37,41 @@ static zbx_on_exit_t	zbx_on_exit_cb;
+ static zbx_get_config_str_f	get_zbx_service_name_cb = NULL;
+ static zbx_get_config_str_f	get_zbx_event_source_cb = NULL;
+ 
++/* A thread may answer ZBX_IS_RUNNING() from its own state instead of the program's: the supervisor units do, */
++/* so that the supervisor can wind them down one by one. The default, and what the main thread and every  */
++/* other worker see, is the program-wide flag. */
++static ZBX_THREAD_LOCAL int	(*is_running_impl)(void *args) = NULL;
++static ZBX_THREAD_LOCAL void	*is_running_args = NULL;
++
+ int	ZBX_IS_RUNNING(void)
+ {
++	if (NULL != is_running_impl)
++		return is_running_impl(is_running_args);
++
+ 	return application_status;
+ }
+ 
++void	zbx_set_is_running(int (*is_running_func)(void *args), void *args)
++{
++	is_running_impl = is_running_func;
++	is_running_args = args;
++}
++
++/* Called right after a stop request has been flagged, so that a main thread blocked in a wait can be woken */
++/* without waiting for its timeout. Registered by the program; nothing is called when none is. */
++static void	(*stop_notify_cb)(void) = NULL;
++
++void	zbx_service_set_stop_notify(void (*cb)(void))
++{
++	stop_notify_cb = cb;
++}
++
+ void	ZBX_DO_EXIT(void)
+ {
+ 	application_status = ZBX_APP_STOPPED;
++
++	if (NULL != stop_notify_cb)
++		stop_notify_cb();
+ }
+ #undef ZBX_APP_STOPPED
+ #undef ZBX_APP_RUNNING
+@@ -50,6 +79,54 @@ void	ZBX_DO_EXIT(void)
  /* free resources allocated by MAIN_ZABBIX_ENTRY() */
  void	zbx_free_service_resources(void);
  
@@ -475,7 +605,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  static void	parent_signal_handler(int sig)
  {
  	switch (sig)
-@@ -58,31 +108,27 @@ static void	parent_signal_handler(int sig)
+@@ -58,31 +135,27 @@ static void	parent_signal_handler(int sig)
  		case SIGTERM:
  			ZBX_DO_EXIT();
  			zabbix_log(LOG_LEVEL_INFORMATION, "Got signal. Exiting ...");
@@ -515,7 +645,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  			break;
  	}
  
-@@ -90,25 +136,63 @@ static VOID WINAPI	ServiceCtrlHandler(DWORD ctrlCode)
+@@ -90,25 +163,63 @@ static VOID WINAPI	ServiceCtrlHandler(DWORD ctrlCode)
  	{
  		case SERVICE_CONTROL_STOP:
  		case SERVICE_CONTROL_SHUTDOWN:
@@ -588,7 +718,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  }
  
  static VOID WINAPI	ServiceEntry(DWORD argc, wchar_t **argv)
-@@ -118,6 +202,8 @@ static VOID WINAPI	ServiceEntry(DWORD argc, wchar_t **argv)
+@@ -118,6 +229,8 @@ static VOID WINAPI	ServiceEntry(DWORD argc, wchar_t **argv)
  	ZBX_UNUSED(argc);
  	ZBX_UNUSED(argv);
  
@@ -597,7 +727,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  	wservice_name = zbx_utf8_to_unicode(get_zbx_service_name_cb());
  	serviceHandle = RegisterServiceCtrlHandler(wservice_name, ServiceCtrlHandler);
  	zbx_free(wservice_name);
-@@ -138,7 +224,12 @@ static VOID WINAPI	ServiceEntry(DWORD argc, wchar_t **argv)
+@@ -138,7 +251,12 @@ static VOID WINAPI	ServiceEntry(DWORD argc, wchar_t **argv)
  	serviceStatus.dwWaitHint	= 0;
  	SetServiceStatus(serviceHandle, &serviceStatus);
  
@@ -611,7 +741,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  }
  
  void	zbx_service_start(int flags)
-@@ -148,7 +239,7 @@ void	zbx_service_start(int flags)
+@@ -148,7 +266,7 @@ void	zbx_service_start(int flags)
  
  	if (0 != (flags & ZBX_TASK_FLAG_FOREGROUND))
  	{
@@ -621,7 +751,7 @@ index e88b58744c4036c0aed4040f442d695c1acadd9d..a652df4f0d3ae3f9de121411e2600d4d
  	}
  
 diff --git a/src/zabbix_proxy/proxy.c b/src/zabbix_proxy/proxy.c
-index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3facb3f27d09 100644
+index d79e575fd3a9ff998218cb56e1e9e65cfc804de8..0b23c897d5b5e4acfbd6a6f5f44462f2cbe1fc50 100644
 --- a/src/zabbix_proxy/proxy.c
 +++ b/src/zabbix_proxy/proxy.c
 @@ -27,6 +27,9 @@
@@ -634,17 +764,17 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  #include "zbxself.h"
  #include "zbxpoller.h"
  #include "zbxhttppoller.h"
-@@ -73,6 +76,9 @@
- #include "zbxstr.h"
- #include "zbxtime.h"
- #include "zbxbincommon.h"
+@@ -77,6 +80,9 @@
+ #include "zbxsupervisor_client.h"
+ #include "zbxcurl.h"
+ #include "zbxtelemetry.h"
 +#ifdef _WINDOWS
 +#include "zbxwinservice.h"
 +#endif
  
  #ifdef HAVE_OPENIPMI
  #include "zbxipmi.h"
-@@ -81,11 +87,34 @@
+@@ -89,11 +95,34 @@
  ZBX_GET_CONFIG_VAR2(const char*, const char*, zbx_progname, NULL)
  
  static const char	title_message[] = "zabbix_proxy";
@@ -679,7 +809,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	"-h", NULL,
  	"-V", NULL,
  	NULL	/* end of text */
-@@ -146,6 +175,21 @@ static const char	*help_message[] = {
+@@ -161,6 +190,21 @@ static const char	*help_message[] = {
  	"                                 (e.g., history syncer,1,processing)",
  	"",
  	"  -T --test-config               Validate configuration file and exit",
@@ -701,7 +831,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	"  -h --help                      Display this help message",
  	"  -V --version                   Display version number",
  	"",
-@@ -168,18 +212,32 @@ static struct zbx_option	longopts[] =
+@@ -183,18 +227,32 @@ static struct zbx_option	longopts[] =
  	{"foreground",		0,	NULL,	'f'},
  	{"runtime-control",	1,	NULL,	'R'},
  	{"test-config",		0,	NULL,	'T'},
@@ -736,7 +866,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  
  static int	*threads_flags;
  
-@@ -543,7 +601,17 @@ static void	zbx_set_defaults(void)
+@@ -592,7 +650,17 @@ static void	zbx_set_defaults(void)
  		zbx_db_config->dbhost = zbx_strdup(zbx_db_config->dbhost, "localhost");
  
  	if (NULL == zbx_config_snmptrap_file)
@@ -754,7 +884,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  
  	if (NULL == zbx_config_pid_file)
  		zbx_config_pid_file = zbx_strdup(zbx_config_pid_file, "/tmp/zabbix_proxy.pid");
-@@ -579,7 +647,21 @@ static void	zbx_set_defaults(void)
+@@ -628,7 +696,21 @@ static void	zbx_set_defaults(void)
  		log_file_cfg.log_type_str = zbx_strdup(log_file_cfg.log_type_str, ZBX_OPTION_LOGTYPE_FILE);
  
  	if (NULL == config_socket_path)
@@ -776,8 +906,8 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  
  	if (0 != config_forks[ZBX_PROCESS_TYPE_IPMIPOLLER])
  		config_forks[ZBX_PROCESS_TYPE_IPMIMANAGER] = 1;
-@@ -1150,6 +1232,23 @@ static void	zbx_free_config(void)
- 	zbx_strarr_free(&config_load_module);
+@@ -1276,6 +1358,23 @@ static void	zbx_free_config(void)
+ 	zbx_strarr_free(&config_telemetry_providers);
  }
  
 +#ifdef _WINDOWS
@@ -800,7 +930,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  static void	zbx_on_exit(int ret, void *on_exit_args)
  {
  	zabbix_log(LOG_LEVEL_DEBUG, "zbx_on_exit() called with ret:%d", ret);
-@@ -1166,6 +1265,10 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
+@@ -1293,6 +1392,10 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
  	}
  #ifdef HAVE_PTHREAD_PROCESS_SHARED
  	zbx_locks_disable();
@@ -811,7 +941,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  #endif
  	zbx_free_metrics();
  	zbx_ipc_service_free_env();
-@@ -1176,6 +1279,9 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
+@@ -1306,6 +1409,9 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
  	zbx_pb_destroy();
  	zbx_free_configuration_cache();
  	zbx_db_close();
@@ -821,10 +951,11 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  
  	zbx_db_deinit();
  
-@@ -1212,7 +1318,21 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
+@@ -1342,7 +1448,21 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
  	zbx_config_tls_free(zbx_config_tls);
  	zbx_db_config_free(zbx_db_config);
  
+-	zbx_exit(EXIT_SUCCESS);
 +#ifdef _WINDOWS
 +	/* A stop asked for by the operator (service control or Ctrl+C) ends by returning: MAIN_ZABBIX_ENTRY() */
 +	/* hands back to ServiceEntry(), which reports the service stopped, and the process leaves through     */
@@ -838,12 +969,12 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
 +
 +	exit(EXIT_FAILURE);
 +#else
- 	exit(EXIT_SUCCESS);
++	exit(EXIT_SUCCESS);
 +#endif
  }
  
  /******************************************************************************
-@@ -1220,6 +1340,38 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
+@@ -1350,6 +1470,38 @@ static void	zbx_on_exit(int ret, void *on_exit_args)
   * Purpose: executes proxy processes                                          *
   *                                                                            *
   ******************************************************************************/
@@ -882,9 +1013,9 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  int	main(int argc, char **argv)
  {
  	static zbx_config_icmpping_t	config_icmpping = {
-@@ -1247,6 +1399,11 @@ int	main(int argc, char **argv)
+@@ -1377,6 +1529,11 @@ int	main(int argc, char **argv)
  	/* initialize libraries before using */
- 	zbx_init_library_common(zbx_log_impl, get_zbx_progname, zbx_backtrace);
+ 	zbx_init_library_common(zabbix_log_impl, zbx_get_log_level_impl, get_zbx_progname, zbx_backtrace);
  	zbx_init_library_nix(get_zbx_progname, get_process_info_by_thread);
 +#if defined(_WINDOWS)
 +	/* the crash handler's backtrace calls the progname callback this sets; */
@@ -894,8 +1025,8 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	zbx_init_library_dbupgrade(get_zbx_program_type, get_zbx_config_timeout);
  	zbx_init_library_dbwrap(NULL, zbx_preprocess_item_value, zbx_preprocessor_flush);
  	zbx_init_library_icmpping(&config_icmpping);
-@@ -1259,6 +1416,12 @@ int	main(int argc, char **argv)
- 	zbx_init_library_preproc(preproc_prepare_value_proxy, preproc_flush_value_proxy, get_zbx_progname);
+@@ -1389,6 +1546,12 @@ int	main(int argc, char **argv)
+ 	zbx_init_library_preproc(preproc_prepare_value_proxy, preproc_flush_value_proxy);
  	zbx_init_library_eval(zbx_dc_get_expressions_by_name);
  
 +#ifdef _WINDOWS
@@ -907,7 +1038,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	/* parse the command-line */
  	while ((char)EOF != (ch = (char)zbx_getopt_long(argc, argv, shortopts, longopts, NULL, &zbx_optarg,
  			&zbx_optind)))
-@@ -1295,6 +1458,24 @@ int	main(int argc, char **argv)
+@@ -1425,6 +1588,24 @@ int	main(int argc, char **argv)
  				opt_f++;
  				t.flags |= ZBX_TASK_FLAG_FOREGROUND;
  				break;
@@ -931,8 +1062,8 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
 +#endif
  			default:
  				zbx_print_usage(zbx_progname, usage_message);
- 				exit(EXIT_FAILURE);
-@@ -1338,6 +1519,21 @@ int	main(int argc, char **argv)
+ 				zbx_exit(EXIT_FAILURE);
+@@ -1468,6 +1649,21 @@ int	main(int argc, char **argv)
  	if (NULL == config_file)
  		config_file = zbx_strdup(NULL, DEFAULT_CONFIG_FILE);
  
@@ -954,8 +1085,8 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	/* required for simple checks */
  	zbx_init_metrics();
  	zbx_init_library_cfg(zbx_program_type, config_file);
-@@ -1374,6 +1570,24 @@ int	main(int argc, char **argv)
- 		exit(SUCCEED == ret ? EXIT_SUCCESS : EXIT_FAILURE);
+@@ -1504,6 +1700,24 @@ int	main(int argc, char **argv)
+ 		zbx_exit(SUCCEED == ret ? EXIT_SUCCESS : EXIT_FAILURE);
  	}
  
 +#ifdef _WINDOWS
@@ -979,115 +1110,128 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  	return zbx_daemon_start(config_allow_root, config_user, t.flags, get_zbx_config_pid_file, zbx_on_exit,
  			log_file_cfg.log_type, log_file_cfg.log_file_name, NULL, get_zbx_threads, get_zbx_threads_num);
  }
-@@ -1456,12 +1670,33 @@ out:
- 	exit(EXIT_FAILURE);
+@@ -1593,10 +1807,44 @@ out:
+ 	zbx_exit(EXIT_FAILURE);
  }
  
 +/******************************************************************************
 + *                                                                            *
-+ * Purpose: copies poller arguments for one worker                            *
++ * Purpose: gives a worker its own copy of its arguments                      *
 + *                                                                            *
-+ * Comments: The pollers share one set of arguments that differ only by type. *
-+ *           Workers are threads, so each needs its own copy: passing the      *
-+ *           shared struct would let the next start overwrite the type of the  *
-+ *           poller just launched.                                             *
++ * Comments: The argument blocks of start_processes() are locals of a         *
++ *           function that returns while the workers run, and the block the   *
++ *           pollers share is rewritten for each poller type. That is fine    *
++ *           where a worker is a forked process with a copy of the parent's   *
++ *           memory, and not where it is a thread, as on Windows: each worker *
++ *           therefore receives a copy that lives for the rest of the run.    *
++ *           The copies are made on every platform so that the start-up path *
++ *           stays the same.                                                  *
 + *                                                                            *
 + ******************************************************************************/
++static void	*worker_args_dup(const void *src, size_t size)
++{
++	void	*args;
++
++	args = zbx_malloc(NULL, size);
++	memcpy(args, src, size);
++
++	return args;
++}
++
++/* the pollers share one argument block that differs only by type, so a poller's copy carries its own type */
 +static zbx_thread_poller_args	*poller_args_dup(const zbx_thread_poller_args *src, unsigned char poller_type)
 +{
 +	zbx_thread_poller_args	*args;
 +
-+	args = (zbx_thread_poller_args *)zbx_malloc(NULL, sizeof(zbx_thread_poller_args));
-+	*args = *src;
++	args = (zbx_thread_poller_args *)worker_args_dup(src, sizeof(zbx_thread_poller_args));
 +	args->poller_type = poller_type;
 +
 +	return args;
 +}
 +
- int	MAIN_ZABBIX_ENTRY(int flags)
+ static void	start_processes(zbx_socket_t *listen_sock, const zbx_config_comms_args_t *config_comms,
+ 		zbx_proc_startup_t *runlevels, int runlevel)
  {
- 	zbx_socket_t				listen_sock = {0};
- 	char					*error = NULL;
- 	int					i;
--	pid_t					pid;
-+	pid_t					pid = 0;	/* only waitpid() assigns it; the Windows loop never does */
- 	zbx_rtc_t				rtc;
- 	zbx_timespec_t				rtc_timeout = {1, 0};
- 	zbx_on_exit_args_t			exit_args = {.rtc = NULL, .listen_sock = NULL};
-@@ -1480,7 +1715,6 @@ int	MAIN_ZABBIX_ENTRY(int flags)
- 			.config_ssl_key_location = config_ssl_key_location
- 		};
- 
 -	zbx_thread_args_t			thread_args;
  
  	zbx_thread_poller_args			poller_args =
  		{
-@@ -1848,7 +2082,8 @@ int	MAIN_ZABBIX_ENTRY(int flags)
- 		zbx_threads_num += config_forks[i];
- 	}
- 
--	zbx_threads = (pid_t *)zbx_calloc(zbx_threads, (size_t)zbx_threads_num, sizeof(pid_t));
-+	zbx_threads = (ZBX_THREAD_HANDLE *)zbx_calloc(zbx_threads, (size_t)zbx_threads_num,
-+			sizeof(ZBX_THREAD_HANDLE));
- 	threads_flags = (int *)zbx_calloc(threads_flags, (size_t)zbx_threads_num, sizeof(int));
- 
- 	if (0 != config_forks[ZBX_PROCESS_TYPE_TRAPPER])
-@@ -1886,8 +2121,6 @@ int	MAIN_ZABBIX_ENTRY(int flags)
- 	zbx_register_stats_procinfo_func(ZBX_PROCESS_TYPE_DISCOVERER, zbx_discovery_stats_procinfo);
- 	zbx_diag_init(diag_add_section_info_proxy);
+@@ -1778,20 +2026,18 @@ static void	start_processes(zbx_socket_t *listen_sock, const zbx_config_comms_ar
+ 			.config_tls = zbx_config_tls
+ 		};
  
 -	thread_args.info.program_type = zbx_program_type;
 -
- 	if (ZBX_PROXYMODE_PASSIVE == config_proxymode)
- 		rtc_process_request_func = rtc_process_request_ex_proxy_passive;
- 	else
-@@ -1897,131 +2130,130 @@ int	MAIN_ZABBIX_ENTRY(int flags)
+ 	/* prepare supervisor unit definitions */
  
- 	for (i = 0; i < zbx_threads_num; i++)
+ 	zbx_curl_cleanup();
+ 
+ 	supervisor_args.unit_defs[ZBX_PROCESS_TYPE_PREPROCMAN] = (zbx_supervisor_unit_def_t){
+ 			.entry = zbx_pp_manager_thread,
+-			.args = &preproc_man_args
++			.args = worker_args_dup(&preproc_man_args, sizeof(preproc_man_args))
+ 	};
+ 
+ 	supervisor_args.unit_defs[ZBX_PROCESS_TYPE_CONFSYNCER] = (zbx_supervisor_unit_def_t){
+ 			.entry = zbx_proxyconfig_thread,
+-			.args = &proxyconfig_args
++			.args = worker_args_dup(&proxyconfig_args, sizeof(proxyconfig_args))
+ 	};
+ 
+ #ifdef HAVE_APM
+@@ -1810,7 +2056,7 @@ static void	start_processes(zbx_socket_t *listen_sock, const zbx_config_comms_ar
+ 
+ 	supervisor_args.unit_defs[ZBX_PROCESS_TYPE_APM_MANAGER] = (zbx_supervisor_unit_def_t){
+ 		.entry = zbx_apm_manager_thread,
+-		.args = &apm_args
++		.args = worker_args_dup(&apm_args, sizeof(apm_args))
+ 	};
+ #endif
+ 
+@@ -1820,129 +2066,125 @@ static void	start_processes(zbx_socket_t *listen_sock, const zbx_config_comms_ar
  	{
--		if (FAIL == get_process_info_by_thread(i + 1, &thread_args.info.process_type,
--				&thread_args.info.process_num))
+ 		zbx_proc_info_t	*info = &processes->values[j];
+ 		int		i = info->index - 1;
 +		zbx_thread_args_t	*thread_args;
-+
+ 
+ 		if (PROCESS_OWNER_MAIN != info->owner)
+ 			continue;
+ 
+-		thread_args.info.process_type = info->type;
+-		thread_args.info.process_num = info->num;
+-		thread_args.info.server_num = info->index;
+-		thread_args.args = NULL;
+-
+-		switch (thread_args.info.process_type)
 +		/* The worker owns its arguments for as long as it runs. They cannot be reused between iterations: a */
 +		/* worker is a thread on Windows and would read whatever the next start had already written over */
 +		/* them. */
 +		thread_args = (zbx_thread_args_t *)zbx_malloc(NULL, sizeof(zbx_thread_args_t));
-+
-+		if (FAIL == get_process_info_by_thread(i + 1, &thread_args->info.process_type,
-+				&thread_args->info.process_num))
- 		{
- 			THIS_SHOULD_NEVER_HAPPEN;
- 			exit(EXIT_FAILURE);
- 		}
- 
--		thread_args.info.server_num = i + 1;
--		thread_args.args = NULL;
 +		thread_args->info.program_type = zbx_program_type;
-+		thread_args->info.server_num = i + 1;
++		thread_args->info.process_type = info->type;
++		thread_args->info.process_num = info->num;
++		thread_args->info.server_num = info->index;
 +		thread_args->args = NULL;
- 
--		switch (thread_args.info.process_type)
++
 +		switch (thread_args->info.process_type)
  		{
- 			case ZBX_PROCESS_TYPE_CONFSYNCER:
--				thread_args.args = &proxyconfig_args;
--				zbx_thread_start(proxyconfig_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &proxyconfig_args;
-+				zbx_thread_start(proxyconfig_thread, thread_args, &zbx_threads[i]);
- 				if (FAIL == zbx_rtc_wait_for_sync_finish(&rtc, rtc_process_request_func))
- 					goto out;
+ 			case ZBX_PROCESS_TYPE_SUPERVISOR:
+ 				threads_flags[i] = ZBX_THREAD_PRIORITY_SUPERVISOR;
+-				thread_args.args = &supervisor_args;
+-				zbx_thread_start(zbx_supervisor_thread, &thread_args, &zbx_threads[i]);
++				thread_args->args = worker_args_dup(&supervisor_args, sizeof(supervisor_args));
++				zbx_thread_start(zbx_supervisor_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_TRAPPER:
 -				thread_args.args = &trapper_args;
 -				zbx_thread_start(zbx_trapper_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &trapper_args;
++				thread_args->args = worker_args_dup(&trapper_args, sizeof(trapper_args));
 +				zbx_thread_start(zbx_trapper_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_DATASENDER:
 -				thread_args.args = &datasender_args;
 -				zbx_thread_start(datasender_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &datasender_args;
++				thread_args->args = worker_args_dup(&datasender_args, sizeof(datasender_args));
 +				zbx_thread_start(datasender_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_POLLER:
@@ -1107,33 +1251,33 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  			case ZBX_PROCESS_TYPE_PINGER:
 -				thread_args.args = &pinger_args;
 -				zbx_thread_start(zbx_pinger_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &pinger_args;
++				thread_args->args = worker_args_dup(&pinger_args, sizeof(pinger_args));
 +				zbx_thread_start(zbx_pinger_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_HOUSEKEEPER:
 -				thread_args.args = &housekeeper_args;
 -				zbx_thread_start(housekeeper_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &housekeeper_args;
++				thread_args->args = worker_args_dup(&housekeeper_args, sizeof(housekeeper_args));
 +				zbx_thread_start(housekeeper_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_HTTPPOLLER:
 -				thread_args.args = &httppoller_args;
 -				zbx_thread_start(zbx_httppoller_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &httppoller_args;
++				thread_args->args = worker_args_dup(&httppoller_args, sizeof(httppoller_args));
 +				zbx_thread_start(zbx_httppoller_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_DISCOVERYMANAGER:
  				threads_flags[i] = ZBX_THREAD_PRIORITY_COLLECTOR;
 -				thread_args.args = &discoverer_args;
 -				zbx_thread_start(zbx_discoverer_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &discoverer_args;
++				thread_args->args = worker_args_dup(&discoverer_args, sizeof(discoverer_args));
 +				zbx_thread_start(zbx_discoverer_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_HISTSYNCER:
  				threads_flags[i] = ZBX_THREAD_PRIORITY_SYNCER;
 -				thread_args.args = &dbsyncer_args;
 -				zbx_thread_start(zbx_dbsyncer_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &dbsyncer_args;
++				thread_args->args = worker_args_dup(&dbsyncer_args, sizeof(dbsyncer_args));
 +				zbx_thread_start(zbx_dbsyncer_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_JAVAPOLLER:
@@ -1146,7 +1290,7 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  			case ZBX_PROCESS_TYPE_SNMPTRAPPER:
 -				thread_args.args = &snmptrapper_args;
 -				zbx_thread_start(zbx_snmptrapper_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &snmptrapper_args;
++				thread_args->args = worker_args_dup(&snmptrapper_args, sizeof(snmptrapper_args));
 +				zbx_thread_start(zbx_snmptrapper_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_SELFMON:
@@ -1156,14 +1300,14 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  			case ZBX_PROCESS_TYPE_VMWARE:
 -				thread_args.args = &vmware_args;
 -				zbx_thread_start(zbx_vmware_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &vmware_args;
++				thread_args->args = worker_args_dup(&vmware_args, sizeof(vmware_args));
 +				zbx_thread_start(zbx_vmware_thread, thread_args, &zbx_threads[i]);
  				break;
  #ifdef HAVE_OPENIPMI
  			case ZBX_PROCESS_TYPE_IPMIMANAGER:
 -				thread_args.args = &ipmi_manager_args;
 -				zbx_thread_start(zbx_ipmi_manager_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &ipmi_manager_args;
++				thread_args->args = worker_args_dup(&ipmi_manager_args, sizeof(ipmi_manager_args));
 +				zbx_thread_start(zbx_ipmi_manager_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_IPMIPOLLER:
@@ -1174,15 +1318,8 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  			case ZBX_PROCESS_TYPE_TASKMANAGER:
 -				thread_args.args = &taskmanager_args;
 -				zbx_thread_start(taskmanager_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &taskmanager_args;
++				thread_args->args = worker_args_dup(&taskmanager_args, sizeof(taskmanager_args));
 +				zbx_thread_start(taskmanager_thread, thread_args, &zbx_threads[i]);
- 				break;
- 			case ZBX_PROCESS_TYPE_PREPROCMAN:
- 				threads_flags[i] = ZBX_THREAD_PRIORITY_COLLECTOR;
--				thread_args.args = &preproc_man_args;
--				zbx_thread_start(zbx_pp_manager_thread, &thread_args, &zbx_threads[i]);
-+				thread_args->args = &preproc_man_args;
-+				zbx_thread_start(zbx_pp_manager_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_AVAILMAN:
  				threads_flags[i] = ZBX_THREAD_PRIORITY_SYNCER;
@@ -1201,6 +1338,13 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
 -				thread_args.args = &poller_args;
 -				zbx_thread_start(zbx_async_poller_thread, &thread_args, &zbx_threads[i]);
 +				thread_args->args = poller_args_dup(&poller_args, ZBX_POLLER_TYPE_HTTPAGENT);
++				zbx_thread_start(zbx_async_poller_thread, thread_args, &zbx_threads[i]);
+ 				break;
+ 			case ZBX_PROCESS_TYPE_TELEMETRY_QUERY_POLLER:
+-				poller_args.poller_type = ZBX_POLLER_TYPE_TELEMETRY_QUERY;
+-				thread_args.args = &poller_args;
+-				zbx_thread_start(zbx_async_poller_thread, &thread_args, &zbx_threads[i]);
++				thread_args->args = poller_args_dup(&poller_args, ZBX_POLLER_TYPE_TELEMETRY_QUERY);
 +				zbx_thread_start(zbx_async_poller_thread, thread_args, &zbx_threads[i]);
  				break;
  			case ZBX_PROCESS_TYPE_AGENT_POLLER:
@@ -1233,41 +1377,44 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  				break;
  		}
  	}
-@@ -2044,6 +2276,33 @@ int	MAIN_ZABBIX_ENTRY(int flags)
+@@ -1968,7 +2210,7 @@ int	MAIN_ZABBIX_ENTRY(int flags)
+ 	zbx_socket_t				listen_sock = {0};
+ 	char					*error = NULL, *old_token = NULL;
+ 	int					i;
+-	pid_t					pid;
++	pid_t					pid = 0;	/* only waitpid() assigns it; the Windows loop never does */
+ 	zbx_rtc_t				rtc;
+ 	zbx_timespec_t				rtc_timeout = {1, 0};
+ 	zbx_on_exit_args_t			exit_args = {.rtc = NULL, .listen_sock = NULL};
+@@ -2206,7 +2448,8 @@ int	MAIN_ZABBIX_ENTRY(int flags)
+ 	zbx_unset_exit_on_terminate(zbx_on_exit_rtc);
+ 
+ 	zbx_threads_num = zbx_supervisor_prepare(config_forks);
+-	zbx_threads = (pid_t *)zbx_calloc(zbx_threads, (size_t)zbx_threads_num, sizeof(pid_t));
++	zbx_threads = (ZBX_THREAD_HANDLE *)zbx_calloc(zbx_threads, (size_t)zbx_threads_num,
++			sizeof(ZBX_THREAD_HANDLE));
+ 	threads_flags = (int *)zbx_calloc(threads_flags, (size_t)zbx_threads_num, sizeof(int));
+ 
+ 	zbx_block_signals(&orig_mask);
+@@ -2351,6 +2594,17 @@ int	MAIN_ZABBIX_ENTRY(int flags)
  		if (NULL != client)
  			zbx_ipc_client_release(client);
  
 +#ifdef _WINDOWS
 +		/* A worker that has exited leaves its thread signalled, which is what waitpid() reports on the other */
-+		/* platform. Polling each handle rather than WaitForMultipleObjects() avoids its limit of 64 objects, */
-+		/* which a proxy can exceed. Once a stop has been requested the workers are expected to exit, so they */
-+		/* are no longer polled: the loop condition ends the loop and zbx_on_exit() joins them. */
-+		if (ZBX_IS_RUNNING())
++		/* platform. Once a stop has been requested the workers are expected to exit, so they are no longer    */
++		/* polled: the loop condition ends the loop and zbx_on_exit() joins them.                              */
++		if (ZBX_IS_RUNNING() && SUCCEED == zbx_waitpid_nohang(zbx_threads, zbx_threads_num))
 +		{
-+			int	n;
-+
-+			for (n = 0; n < zbx_threads_num; n++)
-+			{
-+				if (ZBX_THREAD_HANDLE_NULL == zbx_threads[n])
-+					continue;
-+
-+				if (WAIT_OBJECT_0 == WaitForSingleObject(zbx_threads[n], 0))
-+				{
-+					zabbix_log(LOG_LEVEL_CRIT, "worker thread #%d has terminated"
-+							" unexpectedly", n);
-+					zbx_set_exiting_with_fail();
-+					break;
-+				}
-+			}
-+
-+			if (n < zbx_threads_num)
-+				break;
++			zabbix_log(LOG_LEVEL_CRIT, "a worker thread has terminated unexpectedly");
++			zbx_set_exiting_with_fail();
++			break;
 +		}
 +#else
  		if (0 < (pid = waitpid((pid_t)-1, &i, WNOHANG)))
  		{
  			if (SUCCEED == zbx_child_cleanup(pid, zbx_threads, zbx_threads_num))
-@@ -2052,6 +2311,7 @@ int	MAIN_ZABBIX_ENTRY(int flags)
+@@ -2359,6 +2613,7 @@ int	MAIN_ZABBIX_ENTRY(int flags)
  				break;
  			}
  		}
@@ -1275,20 +1422,18 @@ index 6f8efb7b181cbb76bc71cdb4f4c7b7efa5295b63..44ca5d880b6e554bf5d41cab4d5c3fac
  
  		if (-1 == pid && EINTR != errno)
  		{
-@@ -2068,9 +2328,15 @@ int	MAIN_ZABBIX_ENTRY(int flags)
- out:
+@@ -2378,7 +2633,14 @@ out:
+ 
  	zbx_log_exit_signal();
  
 +#ifndef _WINDOWS
- 	if (SUCCEED == ZBX_EXIT_STATUS())
- 		zbx_rtc_shutdown_subs(&rtc);
--
+ 	zbx_rtc_shutdown_subs(&rtc);
 +#else
 +	/* The shutdown broadcast tells the workers that subscribed to runtime control to wind down; on Unix */
 +	/* they are still running at this point, waiting for it. Here every worker shares ZBX_IS_RUNNING()  */
 +	/* and has already left or is leaving on its own, so the broadcast finds nobody: it would only log a */
 +	/* warning per subscriber and, for a service whose port is gone, wait a minute for it to come back.  */
 +#endif
- 	zbx_on_exit(ZBX_EXIT_STATUS(), &exit_args);
  
- 	return SUCCEED;
+ 	zbx_apm_db_config_clear(&config_apm_db_config);
+ 

@@ -4,7 +4,7 @@ The IPC service binds loopback sockets and keeps a service-name-to-port
 table in the process. Callers of the IPC layer adjusted.
 
 diff --git a/include/zbxipcservice.h b/include/zbxipcservice.h
-index d9c2c4d3c54c003a9c5b9bdde14f32bf146ba135..030e7215d1a404ea7c88e3c1e59b8811bfd6e9eb 100644
+index 173f15b40de34fd8743c1841c294d34d94122598..a675623bd80a74e7db0bf1d77fc461168938d163 100644
 --- a/include/zbxipcservice.h
 +++ b/include/zbxipcservice.h
 @@ -18,7 +18,14 @@
@@ -23,10 +23,10 @@ index d9c2c4d3c54c003a9c5b9bdde14f32bf146ba135..030e7215d1a404ea7c88e3c1e59b8811
  #define ZBX_IPC_SOCKET_BUFFER_SIZE	4096
  
 diff --git a/src/libs/zbxasyncpoller/asyncpoller.c b/src/libs/zbxasyncpoller/asyncpoller.c
-index 81d713aea049c2098b8063eb801f7cb4137e0209..9ff2e057f43e5f009bf8c3262b32cbb6ce6a6b97 100644
+index bd47db1a9578ed2d91b32398bea380df6cc0abff..3b2ff246ad749c6fcf1790f1a19f4a75067a4c62 100644
 --- a/src/libs/zbxasyncpoller/asyncpoller.c
 +++ b/src/libs/zbxasyncpoller/asyncpoller.c
-@@ -87,13 +87,15 @@ const char	*zbx_task_state_to_str(zbx_async_task_state_t task_state)
+@@ -88,13 +88,15 @@ const char	*zbx_task_state_to_str(zbx_async_task_state_t task_state)
  static void	async_event(evutil_socket_t fd, short what, void *arg)
  {
  	zbx_async_task_t	*task = (zbx_async_task_t *)arg;
@@ -45,7 +45,7 @@ index 81d713aea049c2098b8063eb801f7cb4137e0209..9ff2e057f43e5f009bf8c3262b32cbb6
  
  	switch (ret)
  	{
-@@ -120,38 +122,38 @@ static void	async_event(evutil_socket_t fd, short what, void *arg)
+@@ -121,38 +123,38 @@ static void	async_event(evutil_socket_t fd, short what, void *arg)
  			}
  			break;
  		case ZBX_ASYNC_TASK_READ:
@@ -90,21 +90,8 @@ index 81d713aea049c2098b8063eb801f7cb4137e0209..9ff2e057f43e5f009bf8c3262b32cbb6
  			}
  			event_add(task->tx_event, NULL);
  			break;
-diff --git a/src/libs/zbxavailability/avail_manager.c b/src/libs/zbxavailability/avail_manager.c
-index 9b8d0d38587995284707674a76afa7d972440398..7165f4539e837d29e139c9aa71a5f1a3476677e0 100644
---- a/src/libs/zbxavailability/avail_manager.c
-+++ b/src/libs/zbxavailability/avail_manager.c
-@@ -588,7 +588,7 @@ ZBX_THREAD_ENTRY(zbx_availability_manager_thread, args)
- 
- 	zbx_setproctitle("%s #%d [terminated]", get_process_type_string(process_type), process_num);
- 
--	exit(EXIT_SUCCESS);
-+	zbx_worker_exit(EXIT_SUCCESS);
- #undef STAT_INTERVAL
- #undef AVAILABILITY_MANAGER_DELAY
- #undef AVAILABILITY_MANAGER_FLUSH_DELAY_SEC
 diff --git a/src/libs/zbxconnector/connector.c b/src/libs/zbxconnector/connector.c
-index 08f84411d1ad585f676b14cc51232545c0f7c497..5eaeca5f895883427f59583fb0818dadd953e9d2 100644
+index 7265e403f3bb7c62391f7f592a634a96302b1654..dda9c781fb8dd637a5fbddd1050eb392339037aa 100644
 --- a/src/libs/zbxconnector/connector.c
 +++ b/src/libs/zbxconnector/connector.c
 @@ -44,7 +44,9 @@ int	zbx_connector_initialized(void)
@@ -118,23 +105,11 @@ index 08f84411d1ad585f676b14cc51232545c0f7c497..5eaeca5f895883427f59583fb0818dad
  
  	if (CONNECTOR_INITIALIZED_YES != connector_initialized)
  	{
-diff --git a/src/libs/zbxdbsyncer/dbsyncer.c b/src/libs/zbxdbsyncer/dbsyncer.c
-index f4c0875bedf839e5989cd542be4d1ddb6dad8180..6148316f502bad3dc9b9e584ceb0deaf1527c38d 100644
---- a/src/libs/zbxdbsyncer/dbsyncer.c
-+++ b/src/libs/zbxdbsyncer/dbsyncer.c
-@@ -300,6 +300,6 @@ ZBX_THREAD_ENTRY(zbx_dbsyncer_thread, args)
- 
- 	zbx_free(stats);
- 
--	exit(EXIT_SUCCESS);
-+	zbx_worker_exit(EXIT_SUCCESS);
- #undef STAT_INTERVAL
- }
 diff --git a/src/libs/zbxdiscoverer/discoverer.c b/src/libs/zbxdiscoverer/discoverer.c
-index 98cafafff86d2da88e41959c9938b3656db12765..7b43392ccacfafd62b08567d89d9a53a71a80ee7 100644
+index d34510d98b43d79a9250f8231d9eadd933a10877..53e6fdec069e5db7f101cb3f707362ba6fe1a597 100644
 --- a/src/libs/zbxdiscoverer/discoverer.c
 +++ b/src/libs/zbxdiscoverer/discoverer.c
-@@ -47,7 +47,11 @@
+@@ -49,7 +49,11 @@
  #endif
  
  #ifdef HAVE_LDAP
@@ -147,15 +122,8 @@ index 98cafafff86d2da88e41959c9938b3656db12765..7b43392ccacfafd62b08567d89d9a53a
  #endif
  
  static zbx_get_progname_f	zbx_get_progname_cb = NULL;
-@@ -1967,5 +1971,5 @@ ZBX_THREAD_ENTRY(zbx_discoverer_thread, args)
- #endif
- 	zbx_setproctitle("%s #%d [terminated]", get_process_type_string(info->process_type), info->process_num);
- 
--	exit(EXIT_SUCCESS);
-+	zbx_worker_exit(EXIT_SUCCESS);
- }
 diff --git a/src/libs/zbxdiscovery/discovery.c b/src/libs/zbxdiscovery/discovery.c
-index 68728d475a4ef87404e3146a2202192d277ff021..69b0c5d7c07c5709a3bed35db9a08275cf8ebef4 100644
+index 119b41d46ef93e8caff3dee1a12964935cc277b1..2fc93e18132d44ba5c8b4252913dbf53cd5de9a6 100644
 --- a/src/libs/zbxdiscovery/discovery.c
 +++ b/src/libs/zbxdiscovery/discovery.c
 @@ -89,7 +89,9 @@ static void	discovery_send(zbx_uint32_t code, unsigned char *data, zbx_uint32_t
@@ -170,10 +138,10 @@ index 68728d475a4ef87404e3146a2202192d277ff021..69b0c5d7c07c5709a3bed35db9a08275
  	/* each process has a permanent connection to discovery manager */
  	if (0 == socket.fd && FAIL == zbx_ipc_socket_open(&socket, ZBX_IPC_SERVICE_DISCOVERER, SEC_PER_MIN,
 diff --git a/src/libs/zbxipcservice/ipcservice.c b/src/libs/zbxipcservice/ipcservice.c
-index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4cf52a135 100644
+index fce7125388ed4f9d972cfa8c00bcea6c43cf8431..dc11045aceac36b986ee2abf86231356314d64cc 100644
 --- a/src/libs/zbxipcservice/ipcservice.c
 +++ b/src/libs/zbxipcservice/ipcservice.c
-@@ -26,12 +26,242 @@
+@@ -26,12 +26,281 @@
  #include "zbxalgo.h"
  #include "zbxstr.h"
  #include "zbxtime.h"
@@ -413,10 +381,49 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
 +#endif
 +}
 +
++/******************************************************************************
++ *                                                                            *
++ * Purpose: creates the pair of descriptors a service is woken up through     *
++ *                                                                            *
++ * Comments: A pipe on Unix. libevent on Windows only watches sockets, so the *
++ *           pair is two connected loopback sockets there, read and written   *
++ *           with the socket calls above.                                     *
++ *                                                                            *
++ ******************************************************************************/
++static int	ipc_alert_pipe_create(int *fds, char **error)
++{
++#ifdef _WINDOWS
++	evutil_socket_t	pair[2];
++
++	if (0 != evutil_socketpair(AF_INET, SOCK_STREAM, 0, pair))
++	{
++		*error = zbx_dsprintf(*error, "Cannot create alert socket pair: %s.",
++				zbx_strerror_from_system(WSAGetLastError()));
++		return FAIL;
++	}
++
++	fds[0] = (int)pair[0];
++	fds[1] = (int)pair[1];
++#else
++	if (0 != pipe(fds))
++	{
++		*error = zbx_dsprintf(*error, "Cannot create alert pipe: %s.", zbx_strerror(errno));
++		return FAIL;
++	}
++#endif
++	return SUCCEED;
++}
++
++static void	ipc_alert_pipe_close(int *fds)
++{
++	ipc_socket_close_fd(fds[0]);
++	ipc_socket_close_fd(fds[1]);
++}
++
  #define ZBX_IPC_CLIENT_STATE_NONE	0
  #define ZBX_IPC_CLIENT_STATE_QUEUED	1
  
-@@ -178,27 +408,29 @@ static const char	*ipc_make_path(const char *service_name, char **error)
+@@ -176,27 +445,29 @@ static const char	*ipc_make_path(const char *service_name, char **error)
  static int	ipc_write_data(int fd, const unsigned char *data, zbx_uint32_t size, zbx_uint32_t *size_sent)
  {
  	zbx_uint32_t	offset = 0;
@@ -453,7 +460,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	}
  
  	*size_sent = offset;
-@@ -228,12 +460,14 @@ static int	ipc_read_data(int fd, unsigned char *buffer, zbx_uint32_t size, zbx_u
+@@ -226,12 +497,14 @@ static int	ipc_read_data(int fd, unsigned char *buffer, zbx_uint32_t size, zbx_u
  
  	*read_size = 0;
  
@@ -471,9 +478,9 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  			return SUCCEED;
  
  		return FAIL;
-@@ -742,20 +976,13 @@ static void	ipc_service_add_client(zbx_ipc_service_t *service, int fd)
+@@ -739,20 +1012,13 @@ static void	ipc_service_push_client(zbx_ipc_service_t *service, zbx_ipc_client_t
+ static void	ipc_service_add_client(zbx_ipc_service_t *service, int fd)
  {
- 	static zbx_uint64_t	next_clientid = 1;
  	zbx_ipc_client_t	*client;
 -	int			flags;
  
@@ -485,15 +492,24 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
 -	if (-1 == (flags = fcntl(fd, F_GETFL, 0)))
 -	{
 -		zabbix_log(LOG_LEVEL_CRIT, "cannot get IPC client socket flags");
--		exit(EXIT_FAILURE);
+-		zbx_exit(EXIT_FAILURE);
 -	}
 -
 -	if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK))
 +	if (SUCCEED != ipc_socket_set_nonblocking(fd))
  	{
  		zabbix_log(LOG_LEVEL_CRIT, "cannot set non-blocking mode for IPC client socket");
- 		exit(EXIT_FAILURE);
-@@ -1103,9 +1330,14 @@ static int	ipc_check_running_service(const char *service_name)
+ 		zbx_exit(EXIT_FAILURE);
+@@ -1072,7 +1338,7 @@ static void	ipc_service_alert_cb(evutil_socket_t fd, short what, void *arg)
+ 
+ 	ZBX_UNUSED(what);
+ 
+-	while (read(fd, buf, sizeof(buf)) > 0)
++	while (ipc_socket_recv((int)fd, (unsigned char *)buf, sizeof(buf)) > 0)
+ 		;
+ 
+ 	event_base_loopbreak(service->ev);
+@@ -1118,9 +1384,14 @@ static int	ipc_check_running_service(const char *service_name)
   ******************************************************************************/
  int	zbx_ipc_socket_open(zbx_ipc_socket_t *csocket, const char *service_name, int timeout, char **error)
  {
@@ -509,7 +525,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	const char		*socket_path;
  	int			ret = FAIL;
  
-@@ -1114,6 +1346,11 @@ int	zbx_ipc_socket_open(zbx_ipc_socket_t *csocket, const char *service_name, int
+@@ -1129,6 +1400,11 @@ int	zbx_ipc_socket_open(zbx_ipc_socket_t *csocket, const char *service_name, int
  	if (NULL == (socket_path = ipc_make_path(service_name, error)))
  		goto out;
  
@@ -521,7 +537,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	if (-1 == (csocket->fd = socket(AF_UNIX, SOCK_STREAM, 0)))
  	{
  		*error = zbx_dsprintf(*error, "Cannot create client socket: %s.", zbx_strerror(errno));
-@@ -1123,20 +1360,65 @@ int	zbx_ipc_socket_open(zbx_ipc_socket_t *csocket, const char *service_name, int
+@@ -1138,21 +1414,65 @@ int	zbx_ipc_socket_open(zbx_ipc_socket_t *csocket, const char *service_name, int
  	memset(&addr, 0, sizeof(addr));
  	addr.sun_family = AF_UNIX;
  	memcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
@@ -576,6 +592,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  			*error = zbx_dsprintf(*error, "Cannot connect to service \"%s\": %s.", service_name,
  					zbx_strerror(errno));
 -			close(csocket->fd);
+-			csocket->fd = -1;
 +			ipc_socket_close_fd(csocket->fd);
 +#endif
  			goto out;
@@ -589,7 +606,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	}
  
  	csocket->rx_buffer_bytes = 0;
-@@ -1161,7 +1443,7 @@ void	zbx_ipc_socket_close(zbx_ipc_socket_t *csocket)
+@@ -1177,7 +1497,7 @@ void	zbx_ipc_socket_close(zbx_ipc_socket_t *csocket)
  
  	if (-1 != csocket->fd)
  	{
@@ -598,7 +615,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  		csocket->fd = -1;
  	}
  
-@@ -1386,7 +1668,9 @@ static void	ipc_service_user_cb(evutil_socket_t fd, short what, void *arg)
+@@ -1395,7 +1715,9 @@ void	zbx_ipc_message_copy(zbx_ipc_message_t *dst, const zbx_ipc_message_t *src)
   ******************************************************************************/
  int	zbx_ipc_service_init_env(const char *path, char **error)
  {
@@ -608,7 +625,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	int		ret = FAIL;
  
  	zabbix_log(LOG_LEVEL_DEBUG, "In %s() path:%s", __func__, path);
-@@ -1398,6 +1682,21 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
+@@ -1407,6 +1729,21 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
  		goto out;
  	}
  
@@ -630,7 +647,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	if (0 != stat(path, &fs))
  	{
  		*error = zbx_dsprintf(*error, "Failed to stat the specified path \"%s\": %s.", path,
-@@ -1416,6 +1715,7 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
+@@ -1425,6 +1762,7 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
  		*error = zbx_dsprintf(*error, "Cannot access path \"%s\": %s.", path, zbx_strerror(errno));
  		goto out;
  	}
@@ -638,7 +655,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  
  	ipc_path_root_len = strlen(path);
  	if (ZBX_IPC_PATH_MAX < ipc_path_root_len + 3)
-@@ -1431,7 +1731,11 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
+@@ -1440,7 +1778,11 @@ int	zbx_ipc_service_init_env(const char *path, char **error)
  
  	ipc_service_init_libevent();
  
@@ -650,7 +667,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	{
  		*error = zbx_strdup(*error, "Cannot initialize libevent threading support");
  		goto out;
-@@ -1468,18 +1772,27 @@ void	zbx_ipc_service_free_env(void)
+@@ -1477,19 +1819,28 @@ void	zbx_ipc_service_free_env(void)
   ******************************************************************************/
  int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name, char **error)
  {
@@ -668,6 +685,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  
  	zabbix_log(LOG_LEVEL_DEBUG, "In %s() service:%s", __func__, service_name);
  
+ 	service->fd = -1;
 +#ifndef _WINDOWS
  	mode = umask(077);
 +#endif
@@ -679,7 +697,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	if (0 == access(socket_path, F_OK))
  	{
  		if (0 != access(socket_path, W_OK))
-@@ -1496,7 +1809,53 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
+@@ -1506,7 +1857,53 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
  
  		unlink(socket_path);
  	}
@@ -733,7 +751,7 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	if (-1 == (service->fd = socket(AF_UNIX, SOCK_STREAM, 0)))
  	{
  		*error = zbx_dsprintf(*error, "Cannot create socket: %s.", zbx_strerror(errno));
-@@ -1512,6 +1871,7 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
+@@ -1522,6 +1919,7 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
  		*error = zbx_dsprintf(*error, "Cannot bind socket to \"%s\": %s.", socket_path, zbx_strerror(errno));
  		goto out;
  	}
@@ -741,25 +759,29 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  
  	if (0 != listen(service->fd, SOMAXCONN))
  	{
-@@ -1519,6 +1879,17 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
+@@ -1529,11 +1927,19 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
  		goto out;
  	}
  
+-	if (0 != pipe(service->alert_pipe))
 +#ifdef _WINDOWS
 +	/* Only now: a bound socket that is not listening yet still answers on loopback, and a client that connected */
 +	/* in that window would hold something that is not a connection. */
 +	if (SUCCEED != ipc_endpoint_register(socket_path, port))
-+	{
+ 	{
+-		*error = zbx_dsprintf(*error, "Cannot create alert pipe: %s.", zbx_strerror(errno));
 +		*error = zbx_dsprintf(*error, "Cannot register service \"%s\": the limit of %d is reached.",
 +				service_name, ZBX_IPC_ENDPOINTS_MAX);
-+		goto out;
-+	}
+ 		goto out;
+ 	}
 +#endif
 +
++	if (SUCCEED != ipc_alert_pipe_create(service->alert_pipe, error))
++		goto out;
+ 
  	service->path = zbx_strdup(NULL, socket_path);
  	zbx_vector_ipc_client_ptr_create(&service->clients);
- 	zbx_queue_ptr_create(&service->clients_recv);
-@@ -1533,7 +1904,9 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
+@@ -1557,11 +1963,13 @@ int	zbx_ipc_service_start(zbx_ipc_service_t *service, const char *service_name,
  
  	ret = SUCCEED;
  out:
@@ -767,15 +789,22 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  	umask(mode);
 +#endif
  
- 	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%s", __func__, zbx_result_string(ret));
+ 	if (SUCCEED != ret && -1 != service->fd)
+ 	{
+-		close(service->fd);
++		ipc_socket_close_fd(service->fd);
+ 		service->fd = -1;
+ 	}
  
-@@ -1553,11 +1926,15 @@ void	zbx_ipc_service_close(zbx_ipc_service_t *service)
+@@ -1588,13 +1996,16 @@ void	zbx_ipc_service_close(zbx_ipc_service_t *service)
  
- 	zabbix_log(LOG_LEVEL_DEBUG, "In %s() path:%s", __func__, service->path);
+ 	event_free(service->ev_listener);
  
 -	if (0 != close(service->fd))
 -		zabbix_log(LOG_LEVEL_DEBUG, "Cannot close path \"%s\": %s", service->path, zbx_strerror(errno));
+-
 +	ipc_socket_close_fd(service->fd);
+ 	service->fd = -1;
  
 +#ifdef _WINDOWS
 +	/* the endpoint lives in the registry rather than on disk */
@@ -787,7 +816,43 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  
  	/* remove received clients which are not registered */
  	while (NULL != (client = (zbx_ipc_client_t *)zbx_queue_ptr_pop(&service->clients_recv)))
-@@ -1790,7 +2167,7 @@ void	*zbx_ipc_client_get_userdata(zbx_ipc_client_t *client)
+@@ -1615,8 +2026,7 @@ void	zbx_ipc_service_close(zbx_ipc_service_t *service)
+ 	event_free(service->ev_timer);
+ 	event_base_free(service->ev);
+ 
+-	close(service->alert_pipe[0]);
+-	close(service->alert_pipe[1]);
++	ipc_alert_pipe_close(service->alert_pipe);
+ out:
+ 	zabbix_log(LOG_LEVEL_DEBUG, "End of %s()", __func__);
+ }
+@@ -1708,18 +2118,19 @@ int	zbx_ipc_service_recv(zbx_ipc_service_t *service, const zbx_timespec_t *timeo
+  ******************************************************************************/
+ void	zbx_ipc_service_alert(zbx_ipc_service_t *service)
+ {
+-	char	byte = 1;
+-	ssize_t	n;
++	unsigned char	byte = 1;
+ 
+-	while (1 != (n = write(service->alert_pipe[1], &byte, 1)))
++	while (1 != ipc_socket_send(service->alert_pipe[1], &byte, 1))
+ 	{
+-		if (EWOULDBLOCK == errno || EAGAIN == errno)
++		int	err = ipc_socket_errno();
++
++		if (ZBX_IPC_EWOULDBLOCK == err || ZBX_IPC_EAGAIN == err)
+ 			return;
+ 
+-		if (EINTR != errno)
++		if (ZBX_IPC_EINTR != err)
+ 		{
+ 			zabbix_log(LOG_LEVEL_ERR, "cannot alert IPC service \"%s\": %s", service->path,
+-					zbx_strerror(errno));
++					ipc_socket_strerror(err));
+ 			return;
+ 		}
+ 	}
+@@ -1849,7 +2260,7 @@ void	*zbx_ipc_client_get_userdata(zbx_ipc_client_t *client)
   ******************************************************************************/
  int	zbx_ipc_async_socket_open(zbx_ipc_async_socket_t *asocket, const char *service_name, int timeout, char **error)
  {
@@ -796,38 +861,26 @@ index 7323e8502923a62c1491ec6c3a70ced3767a95ce..fd16e168e97703361512232501d0bbd4
  
  	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __func__);
  
-@@ -1804,13 +2181,7 @@ int	zbx_ipc_async_socket_open(zbx_ipc_async_socket_t *asocket, const char *servi
+@@ -1863,13 +2274,7 @@ int	zbx_ipc_async_socket_open(zbx_ipc_async_socket_t *asocket, const char *servi
  		goto out;
  	}
  
 -	if (-1 == (flags = fcntl(asocket->client->csocket.fd, F_GETFL, 0)))
 -	{
 -		zabbix_log(LOG_LEVEL_CRIT, "cannot get IPC client socket flags");
--		exit(EXIT_FAILURE);
+-		zbx_exit(EXIT_FAILURE);
 -	}
 -
 -	if (-1 == fcntl(asocket->client->csocket.fd, F_SETFL, flags | O_NONBLOCK))
 +	if (SUCCEED != ipc_socket_set_nonblocking(asocket->client->csocket.fd))
  	{
  		zabbix_log(LOG_LEVEL_CRIT, "cannot set non-blocking mode for IPC client socket");
- 		exit(EXIT_FAILURE);
-diff --git a/src/libs/zbxpoller/async_poller.c b/src/libs/zbxpoller/async_poller.c
-index 0beeaae6261db5ba4c4a7228cd6794c138b8d3b3..60d3e8651157dfeb5a3b659f6b9379a1b3e1ea0f 100644
---- a/src/libs/zbxpoller/async_poller.c
-+++ b/src/libs/zbxpoller/async_poller.c
-@@ -865,6 +865,6 @@ ZBX_THREAD_ENTRY(zbx_async_poller_thread, args)
- 
- 	zbx_setproctitle("%s #%d [terminated]", get_process_type_string(process_type), process_num);
- 
--	exit(EXIT_SUCCESS);
-+	zbx_worker_exit(EXIT_SUCCESS);
- #undef STAT_INTERVAL
- }
+ 		zbx_exit(EXIT_FAILURE);
 diff --git a/src/libs/zbxpoller/async_queue.h b/src/libs/zbxpoller/async_queue.h
-index 1268f1297d522106c91b77465d69e293a3dc1854..b35a20f43aaa39742c06233a681db4e0ee809a3a 100644
+index f9510768288c7bef205bf323b546c13c35c2d3e5..086c7b1f2d79c163207972c15a19caf5d718dfa7 100644
 --- a/src/libs/zbxpoller/async_queue.h
 +++ b/src/libs/zbxpoller/async_queue.h
-@@ -20,7 +20,9 @@
+@@ -22,7 +22,9 @@
  
  #include "zbxalgo.h"
  
@@ -837,37 +890,11 @@ index 1268f1297d522106c91b77465d69e293a3dc1854..b35a20f43aaa39742c06233a681db4e0
  
  typedef struct
  {
-diff --git a/src/libs/zbxpreproc/pp_manager.c b/src/libs/zbxpreproc/pp_manager.c
-index 3e54cf178c8a4ee53dbcf77b8d1b778f770419e9..c2119d48523c9ed33d7271adfbd84cca7bd8b698 100644
---- a/src/libs/zbxpreproc/pp_manager.c
-+++ b/src/libs/zbxpreproc/pp_manager.c
-@@ -1535,7 +1535,7 @@ ZBX_THREAD_ENTRY(zbx_pp_manager_thread, args)
- 
- 	zbx_setproctitle("%s #%d [terminated]", get_process_type_string(process_type), process_num);
- 
--	exit(EXIT_SUCCESS);
-+	zbx_worker_exit(EXIT_SUCCESS);
- #undef STAT_INTERVAL
- #undef PP_MANAGER_DELAY_SEC
- #undef PP_MANAGER_DELAY_NS
 diff --git a/src/libs/zbxpreproc/pp_protocol.c b/src/libs/zbxpreproc/pp_protocol.c
-index 4f7934a1a1ea0552e40a85830ca851e0ca182a59..7fad7bebd67f5ed17778699bb3240b65fa2199b8 100644
+index 2ea6c8d852f8c19d6909af5bbc086f8a6520d58c..005608117a2fb229fd6868d0b3af38effd5a3018 100644
 --- a/src/libs/zbxpreproc/pp_protocol.c
 +++ b/src/libs/zbxpreproc/pp_protocol.c
-@@ -31,8 +31,10 @@
- #define PACKED_FIELD(value, size)	\
- 		(zbx_packed_field_t){(value), (size), (0 == (size) ? PACKED_FIELD_STRING : PACKED_FIELD_RAW)}
- 
--static zbx_ipc_message_t	cached_message;
--static int			cached_values;
-+/* Batched on the way to the preprocessing manager, so this belongs to the worker doing the batching rather than to */
-+/* the program. */
-+static ZBX_THREAD_LOCAL zbx_ipc_message_t	cached_message;
-+static ZBX_THREAD_LOCAL int			cached_values;
- 
- ZBX_PTR_VECTOR_IMPL(ipcmsg, zbx_ipc_message_t *)
- 
-@@ -909,9 +911,10 @@ static void	preprocessor_send(zbx_uint32_t code, unsigned char *data, zbx_uint32
+@@ -1056,9 +1056,10 @@ static void	preprocessor_send(zbx_uint32_t code, unsigned char *data, zbx_uint32
  		zbx_ipc_message_t *response)
  {
  	char			*error = NULL;

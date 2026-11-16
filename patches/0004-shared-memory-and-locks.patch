@@ -2,13 +2,15 @@ Shared memory and locks: heap memory and Windows synchronisation
 
 Workers share one address space, so shared segments are plain heap and
 mutexes / rwlocks map onto Windows primitives. Configuration and history
-caches adjusted accordingly.
+caches adjusted accordingly. Also carries an upstream fix the Windows
+allocator poisoning caught: zbx_db_init() wrote the connection pool cache
+past the chunk it allocated.
 
 diff --git a/include/zbxmutexs.h b/include/zbxmutexs.h
-index f16920a7c31d309a98bbf642e5c701b080df324d..8c09c603b43566dbb4141535571b8462b7f17dd5 100644
+index 4e88cb149880fe5ea0f7746bf49e65b7df3d15b0..7147110c3f52e9241cd4edbb846c5ff7557a2701 100644
 --- a/include/zbxmutexs.h
 +++ b/include/zbxmutexs.h
-@@ -24,11 +24,80 @@
+@@ -24,11 +24,81 @@
  #	define ZBX_MUTEX_LOG		zbx_mutex_create_per_process_name(L"ZBX_MUTEX_LOG")
  #	define ZBX_MUTEX_PERFSTAT	zbx_mutex_create_per_process_name(L"ZBX_MUTEX_PERFSTAT")
  
@@ -26,6 +28,7 @@ index f16920a7c31d309a98bbf642e5c701b080df324d..8c09c603b43566dbb4141535571b8462
 +#	define ZBX_MUTEX_REMOTE_COMMANDS	zbx_mutex_create_per_process_name(L"ZBX_MUTEX_REMOTE_COMMANDS")
 +#	define ZBX_MUTEX_PROXY_BUFFER		zbx_mutex_create_per_process_name(L"ZBX_MUTEX_PROXY_BUFFER")
 +#	define ZBX_MUTEX_VPS_MONITOR		zbx_mutex_create_per_process_name(L"ZBX_MUTEX_VPS_MONITOR")
++#	define ZBX_MUTEX_DBCONN_POOL		zbx_mutex_create_per_process_name(L"ZBX_MUTEX_DBCONN_POOL")
 +
  typedef wchar_t * zbx_mutex_name_t;
  typedef HANDLE zbx_mutex_t;
@@ -90,46 +93,40 @@ index f16920a7c31d309a98bbf642e5c701b080df324d..8c09c603b43566dbb4141535571b8462
  typedef enum
  {
 diff --git a/src/libs/zbxcacheconfig/dbconfig.c b/src/libs/zbxcacheconfig/dbconfig.c
-index eb55fc0b63c8392b4677a6ce306ef16415119f8d..4a5325a332b150853431e955ee7e2c1fe4bccbe1 100644
+index 5c7cf73b7986f568110e97ef5a2ce86cf1361bc8..481c49c5e4a9281226b87f819e3588d196e10d63 100644
 --- a/src/libs/zbxcacheconfig/dbconfig.c
 +++ b/src/libs/zbxcacheconfig/dbconfig.c
-@@ -155,7 +155,11 @@ static int	dc_item_ref_compare(const void *d1, const void *d2)
+@@ -118,6 +118,10 @@ static int	dc_item_ref_compare(const void *d1, const void *d2)
  	return 0;
  }
  
--static int	sync_in_progress = 0;
 +/* Set while this worker holds the configuration cache write lock for a sync, and read by the locking macros so that */
 +/* the helpers a sync calls do not try to take a lock their caller already holds. It describes the worker, not the */
 +/* cache: a worker is a process where this forks and a thread where it does not, and one worker announcing its sync */
 +/* must never stop the others from locking halfway through their own critical sections. */
-+static ZBX_THREAD_LOCAL int	sync_in_progress = 0;
+ static ZBX_THREAD_LOCAL int	sync_in_progress = 0;
  
  int	zbx_get_sync_in_progress(void)
- {
-@@ -233,7 +237,9 @@ void	set_dc_config(zbx_dc_config_t *in)
+@@ -199,6 +203,8 @@ void	set_dc_config(zbx_dc_config_t *in)
  }
  
  static zbx_rwlock_t	config_lock = ZBX_RWLOCK_NULL;
--static int		wlock_is_locked;
 +
 +/* Whether this worker holds the write lock, for the same reason and with the same scope as sync_in_progress above. */
-+static ZBX_THREAD_LOCAL int	wlock_is_locked;
+ static ZBX_THREAD_LOCAL int	wlock_is_locked;
  
  zbx_rwlock_t	zbx_get_config_lock(void)
- {
-@@ -369,7 +375,10 @@ struct zbx_dc_um_handle_t
+@@ -335,6 +341,9 @@ struct zbx_dc_um_handle_t
  	unsigned char		macro_env;
  };
  
--static zbx_dc_um_handle_t	*dc_um_handle = NULL;
 +/* The open user macro handles form a per-worker stack, and the cache they hold is released when the outermost one */
 +/* closes. Workers are threads here, so each needs its own stack: otherwise one worker's close releases a cache */
 +/* another worker is still reading through. */
-+static ZBX_THREAD_LOCAL zbx_dc_um_handle_t	*dc_um_handle = NULL;
+ static ZBX_THREAD_LOCAL zbx_dc_um_handle_t	*dc_um_handle = NULL;
  
  /******************************************************************************
-  *                                                                            *
-@@ -643,7 +652,19 @@ static zbx_uint64_t	get_item_nextcheck_seed(ZBX_DC_ITEM *item, zbx_uint64_t inte
+@@ -625,7 +634,19 @@ static zbx_uint64_t	get_item_nextcheck_seed(ZBX_DC_ITEM *item, zbx_uint64_t inte
  				SUCCEED == cmp_key_id(key, ZBX_SERVER_ICMPPINGLOSS_KEY) ||
  				SUCCEED == cmp_key_id(key, ZBX_SERVER_ICMPPINGRETRY_KEY))
  		{
@@ -149,10 +146,10 @@ index eb55fc0b63c8392b4677a6ce306ef16415119f8d..4a5325a332b150853431e955ee7e2c1f
  		}
  	}
  
-@@ -1776,9 +1797,10 @@ static void	DCsync_hosts(zbx_dbsync_t *sync, zbx_uint64_t revision, zbx_vector_u
- #endif
+@@ -1769,9 +1790,10 @@ static void	DCsync_hosts(zbx_dbsync_t *sync, zbx_uint64_t revision, zbx_vector_u
  		zbx_vector_ptr_destroy(&host->interfaces_v);
  		zbx_hashset_destroy(&host->items);
+ 		zbx_hashset_destroy(&host->groupids);
 -		zbx_hashset_remove_direct(&config->hosts, host);
 -
 +		/* host is the hashset entry itself: release what it owns before */
@@ -162,17 +159,6 @@ index eb55fc0b63c8392b4677a6ce306ef16415119f8d..4a5325a332b150853431e955ee7e2c1f
  	}
  
  	zbx_vector_dc_host_ptr_destroy(&proxy_hosts);
-@@ -16496,8 +16518,8 @@ int	zbx_dc_maintenance_has_tags(void)
-  ******************************************************************************/
- static zbx_dc_um_handle_t	*dc_open_user_macros(unsigned char macro_env)
- {
--	zbx_dc_um_handle_t	*handle;
--	static zbx_um_cache_t	*um_cache = NULL;
-+	zbx_dc_um_handle_t			*handle;
-+	static ZBX_THREAD_LOCAL zbx_um_cache_t	*um_cache = NULL;
- 
- 	handle = (zbx_dc_um_handle_t *)zbx_malloc(NULL, sizeof(zbx_dc_um_handle_t));
- 
 diff --git a/src/libs/zbxcacheconfig/proxy_group.c b/src/libs/zbxcacheconfig/proxy_group.c
 index 6822b5f170e82ba4e3922c3faa0256bdc992d5f7..9dbdefe916f465d20a7c30bdd8504aa164ab8745 100644
 --- a/src/libs/zbxcacheconfig/proxy_group.c
@@ -191,10 +177,10 @@ index 6822b5f170e82ba4e3922c3faa0256bdc992d5f7..9dbdefe916f465d20a7c30bdd8504aa1
  		zbx_hashset_insert(&get_dc_config()->host_proxy_index, &hpi_local, sizeof(hpi_local));
  	}
 diff --git a/src/libs/zbxcacheconfig/user_macro.c b/src/libs/zbxcacheconfig/user_macro.c
-index 83ba9b641c9867a4f5409a8969f7645c06c3620c..0ff6ec5f287f7c3499350df49e02b55380b97252 100644
+index 730edb15ded5a3bf15a8e04521a8ec5a709dcf70..dbb5335af4a9da1a39f54c721486382b22e22880 100644
 --- a/src/libs/zbxcacheconfig/user_macro.c
 +++ b/src/libs/zbxcacheconfig/user_macro.c
-@@ -1483,8 +1483,12 @@ void	um_cache_remove_hosts(zbx_um_cache_t *cache, const zbx_vector_uint64_t *hos
+@@ -1484,8 +1484,12 @@ void	um_cache_remove_hosts(zbx_um_cache_t *cache, const zbx_vector_uint64_t *hos
  
  		if (NULL != (phost = (zbx_um_host_t **)zbx_hashset_search(&cache->hosts, &phostid)))
  		{
@@ -209,41 +195,29 @@ index 83ba9b641c9867a4f5409a8969f7645c06c3620c..0ff6ec5f287f7c3499350df49e02b553
  	}
  }
 diff --git a/src/libs/zbxcachehistory/cachehistory.c b/src/libs/zbxcachehistory/cachehistory.c
-index 1db3f5938a394d6d0fb3848cf23c41b17a203e28..147e92b2a76ce538548b64ad3264ff70be442fc6 100644
+index 301b257a95bf073149e63943db1958f88f51586b..fed2c7a53226aefd80e9d060040dbc07b09af0f1 100644
 --- a/src/libs/zbxcachehistory/cachehistory.c
 +++ b/src/libs/zbxcachehistory/cachehistory.c
-@@ -55,8 +55,10 @@ static zbx_mutex_t	cache_lock = ZBX_MUTEX_NULL;
+@@ -54,6 +54,8 @@ static zbx_mutex_t	cache_lock = ZBX_MUTEX_NULL;
  static zbx_mutex_t	trends_lock = ZBX_MUTEX_NULL;
  static zbx_mutex_t	cache_ids_lock = ZBX_MUTEX_NULL;
  
--static char		*sql = NULL;
--static size_t		sql_alloc = 4 * ZBX_KIBIBYTE;
 +/* Scratch for whichever worker is building a statement. Workers are threads here, so this cannot be shared between */
 +/* them. */
-+static ZBX_THREAD_LOCAL char	*sql = NULL;
-+static ZBX_THREAD_LOCAL size_t	sql_alloc = 4 * ZBX_KIBIBYTE;
+ static ZBX_THREAD_LOCAL char	*sql = NULL;
+ static ZBX_THREAD_LOCAL size_t	sql_alloc = 4 * ZBX_KIBIBYTE;
  
- static zbx_get_program_type_f	get_program_type_cb = NULL;
- static zbx_sync_history_cache_f	sync_history_cache_cb = NULL;
-@@ -158,10 +160,13 @@ typedef struct
+@@ -155,6 +157,9 @@ typedef struct
  }
  dc_item_value_t;
  
--static char		*string_values = NULL;
--static size_t		string_values_alloc = 0, string_values_offset = 0;
--static dc_item_value_t	*item_values = NULL;
--static size_t		item_values_alloc = 0, item_values_num = 0;
 +/* Where a worker gathers its values before pushing the batch into the shared cache. The batch belongs to the worker, */
 +/* not to the program: two of them appending through item_values_num, with a realloc free to move the array, corrupts */
 +/* both the batch and the cache it is copied into. */
-+static ZBX_THREAD_LOCAL char		*string_values = NULL;
-+static ZBX_THREAD_LOCAL size_t		string_values_alloc = 0, string_values_offset = 0;
-+static ZBX_THREAD_LOCAL dc_item_value_t	*item_values = NULL;
-+static ZBX_THREAD_LOCAL size_t		item_values_alloc = 0, item_values_num = 0;
- 
- static void	hc_add_item_values(dc_item_value_t *values, int values_num);
- static void	hc_queue_item(zbx_hc_item_t *item);
-@@ -208,8 +213,9 @@ void	zbx_dc_get_stats_all(zbx_wcache_info_t *wcache_info)
+ static ZBX_THREAD_LOCAL char		*string_values = NULL;
+ static ZBX_THREAD_LOCAL size_t		string_values_alloc = 0, string_values_offset = 0;
+ static ZBX_THREAD_LOCAL dc_item_value_t	*item_values = NULL;
+@@ -205,8 +210,9 @@ void	zbx_dc_get_stats_all(zbx_wcache_info_t *wcache_info)
   ******************************************************************************/
  void	*zbx_dc_get_stats(int request)
  {
@@ -255,8 +229,29 @@ index 1db3f5938a394d6d0fb3848cf23c41b17a203e28..147e92b2a76ce538548b64ad3264ff70
  	void			*ret;
  
  	LOCK_CACHE;
+diff --git a/src/libs/zbxdb/dbmisc.c b/src/libs/zbxdb/dbmisc.c
+index 75010560a3aa7eccdd1f919fe96b7d70afccd07c..b5fd0de2bd311012c56d25f6315aea6c2f904d06 100644
+--- a/src/libs/zbxdb/dbmisc.c
++++ b/src/libs/zbxdb/dbmisc.c
+@@ -134,10 +134,14 @@ int	zbx_db_init(char **error)
+ 		return FAIL;
+ 	}
+ 
+-	idcache = zbx_shmem_malloc(idcache_mem, NULL, sizeof(zbx_db_idcache_t));
++	/* The segment was sized for one chunk holding both structures, so both come out of one allocation: the */
++	/* pool cache placed right after a chunk of the id cache's own size would land in the allocator's free  */
++	/* space, behind the chunk's size field, as the sanitized Windows build showed.                         */
++	idcache = zbx_shmem_malloc(idcache_mem, NULL, ZBX_SIZE_T_ALIGN8(sizeof(zbx_db_idcache_t)) +
++			sizeof(zbx_dbconn_pool_info_t));
+ 	memset(idcache->lastids, 0, sizeof(idcache->lastids));
+ 
+-	pool_cache = (zbx_dbconn_pool_info_t *)(idcache + 1);
++	pool_cache = (zbx_dbconn_pool_info_t *)((char *)idcache + ZBX_SIZE_T_ALIGN8(sizeof(zbx_db_idcache_t)));
+ 	memset(pool_cache, 0, sizeof(zbx_dbconn_pool_info_t));
+ 
+ 	return SUCCEED;
 diff --git a/src/libs/zbxdiag/diag.c b/src/libs/zbxdiag/diag.c
-index 1372a984091e10cb050cbfb6363eee572714e269..a1ab1bf3e0b885b1951c561245d7a99cab2f9901 100644
+index c8e442f29bdb5dc6a1cd0e602015b5fa4f000bfe..dab842367313703314588368c17e837d4ed1210d 100644
 --- a/src/libs/zbxdiag/diag.c
 +++ b/src/libs/zbxdiag/diag.c
 @@ -408,7 +408,11 @@ static void	zbx_json_addhex(struct zbx_json *j, const char *name, zbx_uint64_t v
@@ -288,7 +283,7 @@ index 1372a984091e10cb050cbfb6363eee572714e269..a1ab1bf3e0b885b1951c561245d7a99c
  	zbx_json_addobject(json, NULL);
  	zbx_json_addhex(json, "ZBX_RWLOCK_CONFIG", (zbx_uint64_t)zbx_rwlock_addr_get(ZBX_RWLOCK_CONFIG));
 diff --git a/src/libs/zbxmutexs/mutexs.c b/src/libs/zbxmutexs/mutexs.c
-index b845e71511aecd149e463b2ac6af18b17595d0b0..b81e5573d54741366308f61a59697b3f1452af2d 100644
+index 76cb2c3d93ec04d5420bf998785963ee74cb1a7b..1ec17949208c94f232565303ed4a49ed743ad818 100644
 --- a/src/libs/zbxmutexs/mutexs.c
 +++ b/src/libs/zbxmutexs/mutexs.c
 @@ -367,6 +367,33 @@ void	zbx_locks_enable(void)
@@ -325,7 +320,7 @@ index b845e71511aecd149e463b2ac6af18b17595d0b0..b81e5573d54741366308f61a59697b3f
  /******************************************************************************
   *                                                                            *
   * Purpose: Create the mutex                                                  *
-@@ -581,3 +608,128 @@ zbx_mutex_name_t	zbx_mutex_create_per_process_name(const zbx_mutex_name_t prefix
+@@ -583,3 +610,128 @@ zbx_mutex_name_t	zbx_mutex_create_per_process_name(const zbx_mutex_name_t prefix
  	return name;
  }
  #endif
@@ -455,7 +450,7 @@ index b845e71511aecd149e463b2ac6af18b17595d0b0..b81e5573d54741366308f61a59697b3f
 +}
 +#endif	/* _WINDOWS */
 diff --git a/src/libs/zbxshmem/memalloc.c b/src/libs/zbxshmem/memalloc.c
-index a2bb72fa2980b6150ea0f54a0121c90a058d0eaf..12d4936457035afddd5f15edc0685004b0f89fe6 100644
+index bee2fdcf34dd24885590563c506ccade8f5bb276..04669359203587f590bc09910b9c029ff7cdd84e 100644
 --- a/src/libs/zbxshmem/memalloc.c
 +++ b/src/libs/zbxshmem/memalloc.c
 @@ -113,6 +113,44 @@ static void	__mem_free(zbx_shmem_info_t *info, void *ptr);
@@ -630,7 +625,7 @@ index a2bb72fa2980b6150ea0f54a0121c90a058d0eaf..12d4936457035afddd5f15edc0685004
  
  void	*__zbx_shmem_malloc(const char *file, int line, zbx_shmem_info_t *info, const void *old, size_t size)
 diff --git a/src/zabbix_proxy/cachehistory/cachehistory_proxy.c b/src/zabbix_proxy/cachehistory/cachehistory_proxy.c
-index a1c5f1db2ce89d3dd29165b4e2de59573b105153..89d29854d1298021ebe58343e7ce4186c3c318ea 100644
+index 6c9f49a575dc00c5df203abd3d90273ecd76f7dd..84b8b18b97d6b2b07009cdc2990e456f60529b97 100644
 --- a/src/zabbix_proxy/cachehistory/cachehistory_proxy.c
 +++ b/src/zabbix_proxy/cachehistory/cachehistory_proxy.c
 @@ -28,8 +28,9 @@

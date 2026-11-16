@@ -4,10 +4,10 @@ Net-SNMP (built from source for MSVC) and libssh2 wired into pollers,
 preprocessing and the trap reader.
 
 diff --git a/src/libs/zbxpoller/checks_snmp.c b/src/libs/zbxpoller/checks_snmp.c
-index 34ecb3bfe51b6ca0ef8df042d219967bad9da2ae..8a8183111c793c82445959a087cb6aa3f8e3982f 100644
+index eb6ba64c9d47008f703445ba5ca80cce9f72bf6f..7d565aabae9faad12711afa67a69c6d592b830c4 100644
 --- a/src/libs/zbxpoller/checks_snmp.c
 +++ b/src/libs/zbxpoller/checks_snmp.c
-@@ -3955,17 +3955,23 @@ static int	zbx_snmp_process_standard(struct snmp_session *ss, const zbx_dc_item_
+@@ -4266,17 +4266,23 @@ static int	zbx_snmp_process_standard(struct snmp_session *ss, const zbx_dc_item_
   *******************************************************************************************/
  static void	zbx_init_snmp(const char *progname)
  {
@@ -31,7 +31,7 @@ index 34ecb3bfe51b6ca0ef8df042d219967bad9da2ae..8a8183111c793c82445959a087cb6aa3
  
  	netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_DISABLE_PERSISTENT_LOAD, 1);
  	netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_DISABLE_PERSISTENT_SAVE, 1);
-@@ -3973,7 +3979,9 @@ static void	zbx_init_snmp(const char *progname)
+@@ -4284,7 +4290,9 @@ static void	zbx_init_snmp(const char *progname)
  	init_snmp(progname);
  	zbx_snmp_init_done = 1;
  
@@ -41,7 +41,7 @@ index 34ecb3bfe51b6ca0ef8df042d219967bad9da2ae..8a8183111c793c82445959a087cb6aa3
  }
  
  /*******************************************************************************************
-@@ -3984,20 +3992,25 @@ static void	zbx_init_snmp(const char *progname)
+@@ -4295,20 +4303,25 @@ static void	zbx_init_snmp(const char *progname)
   *******************************************************************************************/
  static void	zbx_shutdown_snmp(const char *progname)
  {
@@ -68,7 +68,7 @@ index 34ecb3bfe51b6ca0ef8df042d219967bad9da2ae..8a8183111c793c82445959a087cb6aa3
  
  /******************************************************************************
 diff --git a/src/libs/zbxpoller/ssh2_run.c b/src/libs/zbxpoller/ssh2_run.c
-index f0094f5d7e9b86950a8cbf83fe5f058967fb3904..4e4e93dbafbaaba0cb7a4f51be0e1908d066cc3f 100644
+index 89b34d9a04b24282e839db4b670f0870b10081bc..fa5369dde27ecb3ed5a30efd9e46cfba2988c093 100644
 --- a/src/libs/zbxpoller/ssh2_run.c
 +++ b/src/libs/zbxpoller/ssh2_run.c
 @@ -12,8 +12,17 @@
@@ -95,13 +95,13 @@ index f0094f5d7e9b86950a8cbf83fe5f058967fb3904..4e4e93dbafbaaba0cb7a4f51be0e1908
  }
 +
 +#endif	/* HAVE_SSH2 */
-diff --git a/src/libs/zbxpreproc/preproc_snmp.c b/src/libs/zbxpreproc/preproc_snmp.c
-index e81e23e7889e8f23f912c2ed8d177434d3c89d6b..d233fa9f0d0778d654d5786af0dff3fd6480c7b1 100644
---- a/src/libs/zbxpreproc/preproc_snmp.c
-+++ b/src/libs/zbxpreproc/preproc_snmp.c
-@@ -1073,17 +1073,23 @@ out:
- /* This function has to be moved to separate SNMP library when such refactoring will be done in future */
- static void	zbx_init_snmp(void)
+diff --git a/src/libs/zbxsnmp/snmp.c b/src/libs/zbxsnmp/snmp.c
+index f1ce5cea01d27a7fe634ff78aa8320afe8febd53..8c1359e6d8424d0632ce43107224bd2200e35a7b 100644
+--- a/src/libs/zbxsnmp/snmp.c
++++ b/src/libs/zbxsnmp/snmp.c
+@@ -25,17 +25,23 @@ static int	zbx_snmp_init_done;
+ 
+ void	zbx_snmp_init(const char *progname)
  {
 +#ifndef _WINDOWS
  	sigset_t	mask, orig_mask;
@@ -111,8 +111,8 @@ index e81e23e7889e8f23f912c2ed8d177434d3c89d6b..d233fa9f0d0778d654d5786af0dff3fd
  		return;
  
 +#ifndef _WINDOWS
-+	/* Net-SNMP init is not async-signal-safe; block the workers' signals around it. Windows workers are threads */
-+	/* and take no such signals, so there is nothing to block. */
++	/* Net-SNMP initialisation is not async-signal-safe, so the signals the workers use are blocked around it. */
++	/* Windows workers are threads and are not delivered these POSIX signals, so there is nothing to block. */
  	sigemptyset(&mask);
  	sigaddset(&mask, SIGTERM);
  	sigaddset(&mask, SIGUSR2);
@@ -123,8 +123,8 @@ index e81e23e7889e8f23f912c2ed8d177434d3c89d6b..d233fa9f0d0778d654d5786af0dff3fd
  
  	netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_DISABLE_PERSISTENT_LOAD, 1);
  	netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_DISABLE_PERSISTENT_SAVE, 1);
-@@ -1093,7 +1099,9 @@ static void	zbx_init_snmp(void)
- 	netsnmp_init_mib();
+@@ -49,24 +55,31 @@ void	zbx_snmp_init(const char *progname)
+ 
  	zbx_snmp_init_done = 1;
  
 +#ifndef _WINDOWS
@@ -132,15 +132,12 @@ index e81e23e7889e8f23f912c2ed8d177434d3c89d6b..d233fa9f0d0778d654d5786af0dff3fd
 +#endif
  }
  
- void	preproc_init_snmp(void)
-@@ -1105,18 +1113,23 @@ void	preproc_init_snmp(void)
- 
- void	preproc_shutdown_snmp(void)
+ void	zbx_snmp_clear(const char *progname)
  {
 +#ifndef _WINDOWS
  	sigset_t	mask, orig_mask;
  
-+	/* see zbx_init_snmp() for why the signal block is Unix-only */
++	/* see zbx_snmp_init() for why the signal block is Unix-only */
  	sigemptyset(&mask);
  	sigaddset(&mask, SIGTERM);
  	sigaddset(&mask, SIGUSR2);
@@ -149,27 +146,28 @@ index e81e23e7889e8f23f912c2ed8d177434d3c89d6b..d233fa9f0d0778d654d5786af0dff3fd
  	zbx_sigmask(SIG_BLOCK, &mask, &orig_mask);
 +#endif
  
- 	snmp_shutdown(preproc_get_progname_cb()());
+ 	snmp_shutdown(progname);
  	zbx_snmp_init_done = 0;
  
 +#ifndef _WINDOWS
  	zbx_sigmask(SIG_SETMASK, &orig_mask, NULL);
 +#endif
  }
+ 
  #endif
 diff --git a/src/libs/zbxsnmptrapper/snmptrapper.c b/src/libs/zbxsnmptrapper/snmptrapper.c
-index 1ceb8e1ac6271ffca269e16533b38cbfc9a338c8..1d547080c6f072528af6ad67d4fae033bf8b01b1 100644
+index 17495539eed6ace3e7c444684362cb854aa46e38..4861a4d0b5123c43d913f56504f173e10a7b4015 100644
 --- a/src/libs/zbxsnmptrapper/snmptrapper.c
 +++ b/src/libs/zbxsnmptrapper/snmptrapper.c
-@@ -33,6 +33,7 @@
+@@ -32,6 +32,7 @@
+ #include "zbxpreproc.h"
  #include "zbxcrypto.h"
  #include "zbxhash.h"
- #include "zbxexpr.h"
 +#include "zbxfile.h"
  
  static int	trap_fd = -1;
  static off_t	trap_lastsize;
-@@ -607,7 +608,10 @@ static int	open_trap_file(const char *config_snmptrap_file)
+@@ -605,7 +606,10 @@ static int	open_trap_file(const char *config_snmptrap_file)
  	zbx_stat_t	file_buf;
  	char		*error = NULL;
  

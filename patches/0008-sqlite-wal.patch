@@ -4,10 +4,10 @@ History syncers are threads with their own connection; WAL lets one
 writer and the readers proceed together.
 
 diff --git a/src/libs/zbxdb/dbconn.c b/src/libs/zbxdb/dbconn.c
-index ef8c3e8fd172cc2f5bc4be738b1234f3aaee84a5..04b9176b413957b14366ab4b83dc2b5a0ec7d86d 100644
+index a8f5d9ca6e44500be5327b9b40323e4764786084..31d34dce1983a6c1c0deff43eab7ed675b5fe2f7 100644
 --- a/src/libs/zbxdb/dbconn.c
 +++ b/src/libs/zbxdb/dbconn.c
-@@ -755,6 +755,21 @@ out:
+@@ -772,6 +772,21 @@ out:
  	/* do not return SQLITE_BUSY immediately, wait for N ms */
  	sqlite3_busy_timeout(db->conn, SEC_PER_MIN * 1000);
  
@@ -29,27 +29,12 @@ index ef8c3e8fd172cc2f5bc4be738b1234f3aaee84a5..04b9176b413957b14366ab4b83dc2b5a
  	if (0 < (ret = dbconn_execute(db, "pragma synchronous=0")))
  		ret = ZBX_DB_OK;
  
-diff --git a/src/libs/zbxdb/dbconn_compat.c b/src/libs/zbxdb/dbconn_compat.c
-index 6df16f43f6fa698b8f9f3f886dbd75f4ed054533..6b22877eb9baa0b687ab073b4c54794ebfe2e8d8 100644
---- a/src/libs/zbxdb/dbconn_compat.c
-+++ b/src/libs/zbxdb/dbconn_compat.c
-@@ -18,7 +18,9 @@
- #include "zbxdbschema.h"
- #include "zbxtypes.h"
- 
--static zbx_dbconn_t	*dbconn;
-+/* Each worker owns its database connection. They are separate processes on Unix, so a plain global was per-worker */
-+/* there; here they are threads of one process and would otherwise share a single SQLite handle. */
-+static ZBX_THREAD_LOCAL zbx_dbconn_t	*dbconn;
- static int		db_autoincrement;
- 
- void	zbx_db_init_autoincrement_options(void)
 diff --git a/src/libs/zbxdbhigh/db.c b/src/libs/zbxdbhigh/db.c
-index e4ce74414355eb2fb17a199639eb1738cfc75d49..109a0c12ccddb5cfb3a9568b2e6855457d01cab3 100644
+index a04617400b175c5a4e02f6107e5c84aa0a1e1ebf..b6c31dbcc32f168971cb250b82e08622e1c684c9 100644
 --- a/src/libs/zbxdbhigh/db.c
 +++ b/src/libs/zbxdbhigh/db.c
-@@ -179,7 +179,9 @@ void	zbx_db_version_info_clear(struct zbx_db_version_info_t *version_info)
- 	zbx_free(version_info->ext_friendly_current_version);
+@@ -175,7 +175,9 @@ int	zbx_db_check_version_info(struct zbx_db_version_info_t *info, int allow_unsu
+ 	return zbx_db_verify_version_info(info, allow_unsupported, program_type);
  }
  
 -static char	buf_string[640];
